@@ -10,6 +10,7 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.definitecoding.bydadasrevive.install.ApkInstaller
+import com.definitecoding.bydadasrevive.install.ApkSource
 import com.definitecoding.bydadasrevive.install.InstallOutcome
 import com.definitecoding.bydadasrevive.log.RunLog
 import com.definitecoding.bydadasrevive.log.RunRecord
@@ -19,7 +20,6 @@ import com.definitecoding.bydadasrevive.pkg.PackageInspector
 import com.definitecoding.bydadasrevive.shell.ShellChannel
 import com.definitecoding.bydadasrevive.shell.ShellState
 import java.io.File
-import java.io.InputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -51,6 +51,8 @@ data class ReviveState(
     val apkPath: String = DEFAULT_APK_PATH,
     val pickedUri: Uri? = null,
     val installOutput: String? = null,
+    val installPhase: String? = null,
+    val installProgress: Float? = null,
     val uninstallOutput: String? = null,
     val launchOutput: String? = null,
     val adasPidAfter: String? = null,
@@ -72,8 +74,24 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     val state: StateFlow<ReviveState> = _state.asStateFlow()
     val shellState: StateFlow<ShellState> = shell.state
 
+    /** Set once the car has trusted this app's adb key, so a new grant is detectable. */
+    private val grantMarker = File(application.filesDir, "adb-access-granted")
+
+    private val _pendingRestart = MutableStateFlow(false)
+    val pendingRestart: StateFlow<Boolean> = _pendingRestart.asStateFlow()
+
     init {
         refreshPackages()
+        connectIfNeeded()
+    }
+
+    /**
+     * Asks for shell access without being told to. The connect attempt *is* the request:
+     * an untrusted key makes adbd raise the "Allow debugging?" dialog on the car.
+     */
+    fun connectIfNeeded() {
+        if (shell.isConnected) return
+        connect()
     }
 
     fun setEndpoint(host: String, port: String) {
@@ -81,14 +99,27 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun connect() = launchBusy {
-        log("connecting to ${_state.value.host}:${_state.value.port}")
+        log("checking for adb shell access on ${_state.value.host}:${_state.value.port}")
+        val firstGrant = !grantMarker.exists()
+        if (firstGrant) {
+            log("no grant on record - watch the car screen for \"Allow debugging?\"")
+        }
+
         val result = shell.connect(_state.value.host, _state.value.port.toIntOrNull() ?: 5555)
         result.fold(
             onSuccess = { banner ->
                 log("connected: $banner")
-                probeAdas(before = true)
+                if (firstGrant) {
+                    runCatching { grantMarker.createNewFile() }
+                    // The package list and every check were read without shell, so the
+                    // cleanest way to pick it all up is to come back up from scratch.
+                    log("access granted - restarting so every check runs with shell")
+                    _pendingRestart.value = true
+                } else {
+                    probeAdas(before = true)
+                }
             },
-            onFailure = { error -> log("connect failed: ${error.message}") },
+            onFailure = { error -> log("no shell access: ${error.message}") },
         )
     }
 
@@ -158,39 +189,62 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
         val picked = _state.value.pickedUri
         val path = _state.value.apkPath.trim()
 
-        val source: (() -> InputStream)? = when {
-            picked != null -> {
-                { context.contentResolver.openInputStream(picked) ?: error("cannot open $picked") }
+        _state.value = _state.value.copy(
+            installOutput = null,
+            installPhase = "Locating the APK",
+            installProgress = null,
+        )
+        log("install starting")
+
+        val source = when {
+            picked != null -> ApkSource(picked.toString(), sizeOf(picked)) {
+                context.contentResolver.openInputStream(picked) ?: error("cannot open $picked")
             }
             path.isBlank() -> null
             else -> resolvePath(path)
         }
 
         if (source == null) {
-            _state.value = _state.value.copy(installOutput = "No readable APK. Pick one with the Files app.")
+            _state.value = _state.value.copy(
+                installOutput = "No readable APK. Pick one with the Files app.",
+                installPhase = null,
+            )
             return@launchBusy
         }
 
-        log("installing ${picked ?: path} via PackageInstaller")
-        val outcome = installer.install(ADAS_PACKAGE, source)
+        log("installing ${source.label} (${source.size?.let { "$it bytes" } ?: "size unknown"})")
+        val outcome = installer.install(ADAS_PACKAGE, source) { phase, fraction ->
+            _state.value = _state.value.copy(installPhase = phase, installProgress = fraction)
+            log(phase)
+        }
         val rendered = when (outcome) {
             InstallOutcome.Success -> "Success"
             is InstallOutcome.Failure -> outcome.message
         }
-        log("install: $rendered")
-        _state.value = _state.value.copy(installOutput = rendered)
+        log("install finished: $rendered")
+        _state.value = _state.value.copy(
+            installOutput = rendered,
+            installPhase = null,
+            installProgress = null,
+        )
     }
+
+    private fun sizeOf(uri: Uri): Long? = runCatching {
+        getApplication<Application>().contentResolver
+            .openAssetFileDescriptor(uri, "r")
+            ?.use { it.length.takeIf { length -> length >= 0 } }
+    }.getOrNull()
 
     /**
      * Scoped storage keeps this app out of another app's files in Downloads, so a raw
      * path is read directly when possible and otherwise copied in by shell, which can
      * write to this app's own external directory.
      */
-    private suspend fun resolvePath(path: String): (() -> InputStream)? {
+    private suspend fun resolvePath(path: String): ApkSource? {
         val direct = File(path)
         if (direct.canRead()) {
             log("reading $path directly")
-            return { direct.inputStream() }
+            return ApkSource(path, direct.length()) { direct.inputStream() }
         }
 
         if (!shell.isConnected) {
@@ -198,6 +252,7 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
             return null
         }
 
+        _state.value = _state.value.copy(installPhase = "Copying the APK in with shell")
         val context = getApplication<Application>()
         val staged = File(context.getExternalFilesDir(null) ?: context.filesDir, "staged.apk")
         runShell("cp '$path' '${staged.absolutePath}' && chmod 644 '${staged.absolutePath}'")
@@ -206,7 +261,7 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
             return null
         }
         log("copied ${staged.length()} bytes to ${staged.absolutePath}")
-        return { staged.inputStream() }
+        return ApkSource(staged.absolutePath, staged.length()) { staged.inputStream() }
     }
 
     /** Step 1 option: hand the uninstall to the platform, with its own dialog. */

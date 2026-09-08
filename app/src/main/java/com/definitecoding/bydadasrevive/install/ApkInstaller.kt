@@ -19,6 +19,17 @@ sealed interface InstallOutcome {
     data class Failure(val message: String) : InstallOutcome
 }
 
+/** Where the APK bytes come from, and how many of them there are if that is knowable. */
+class ApkSource(val label: String, val size: Long?, val open: () -> InputStream)
+
+/**
+ * Progress for the UI. [fraction] is null while the step has no measurable length,
+ * which is most of them.
+ */
+fun interface InstallProgress {
+    fun onPhase(phase: String, fraction: Float?)
+}
+
 /**
  * Installs and uninstalls through the platform PackageInstaller, as this app rather
  * than as shell. The user confirms each one in a system dialog.
@@ -30,11 +41,17 @@ class ApkInstaller(private val context: Context) {
 
     private val installer = context.packageManager.packageInstaller
 
-    suspend fun install(packageName: String?, openApk: () -> InputStream): InstallOutcome {
+    suspend fun install(
+        packageName: String?,
+        source: ApkSource,
+        progress: InstallProgress,
+    ): InstallOutcome {
+        progress.onPhase("Creating the install session", null)
         val params = PackageInstaller.SessionParams(
             PackageInstaller.SessionParams.MODE_FULL_INSTALL
         ).apply {
             packageName?.let { setAppPackageName(it) }
+            source.size?.let { setSize(it) }
         }
 
         val sessionId = try {
@@ -46,9 +63,9 @@ class ApkInstaller(private val context: Context) {
         try {
             withContext(Dispatchers.IO) {
                 installer.openSession(sessionId).use { session ->
-                    // -1 because the length of a content Uri is not always known up front.
-                    session.openWrite(WRITE_NAME, 0, -1).use { sink ->
-                        openApk().use { source -> source.copyTo(sink) }
+                    session.openWrite(WRITE_NAME, 0, source.size ?: -1).use { sink ->
+                        source.open().use { stream -> pump(stream, sink, source.size, progress) }
+                        progress.onPhase("Flushing to disk", null)
                         session.fsync(sink)
                     }
                 }
@@ -58,9 +75,37 @@ class ApkInstaller(private val context: Context) {
             return InstallOutcome.Failure("writing the session failed: ${error.message}")
         }
 
+        progress.onPhase("Waiting for Android's confirmation dialog", null)
         return awaitStatus { intentSender ->
             installer.openSession(sessionId).commit(intentSender)
         }
+    }
+
+    /** Copies the APK in, reporting often enough that the bar visibly moves. */
+    private fun pump(
+        source: InputStream,
+        sink: java.io.OutputStream,
+        total: Long?,
+        progress: InstallProgress,
+    ) {
+        val buffer = ByteArray(128 * 1024)
+        var written = 0L
+        var lastReported = 0L
+        while (true) {
+            val read = source.read(buffer)
+            if (read < 0) break
+            sink.write(buffer, 0, read)
+            written += read
+            if (written - lastReported >= REPORT_EVERY) {
+                lastReported = written
+                val megabytes = written / 1_048_576.0
+                progress.onPhase(
+                    "Copying the APK, %.1f MB".format(megabytes),
+                    total?.takeIf { it > 0 }?.let { (written.toDouble() / it).toFloat() },
+                )
+            }
+        }
+        progress.onPhase("Copied ${written / 1024} KB", 1f)
     }
 
     suspend fun uninstall(packageName: String): InstallOutcome = awaitStatus { intentSender ->
@@ -139,6 +184,7 @@ class ApkInstaller(private val context: Context) {
 
     private companion object {
         const val WRITE_NAME = "revive.apk"
+        const val REPORT_EVERY = 512L * 1024
 
         /** Hidden extra, but it carries the real INSTALL_FAILED_* code when present. */
         const val EXTRA_LEGACY_STATUS = "android.content.pm.extra.LEGACY_STATUS"
