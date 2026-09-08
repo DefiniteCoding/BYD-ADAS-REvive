@@ -114,6 +114,22 @@ fun titleOf(step: StepId): String = when (step) {
     StepId.Confirm -> "Did the cluster come back?"
 }
 
+/** Two or three words, for the stepper rail where the full titles do not fit. */
+fun shortTitleOf(step: StepId): String = when (step) {
+    StepId.Blocked -> "Not supported"
+    StepId.Parked -> "Parked"
+    StepId.PathChoice -> "How"
+    StepId.AdbGrant -> "Access"
+    StepId.Triage -> "Symptom"
+    StepId.Uninstall -> "Remove"
+    StepId.ChooseApk -> "File"
+    StepId.Install -> "Install"
+    StepId.Verify -> "Check"
+    StepId.Warn224 -> "Warning"
+    StepId.Launch -> "Open 224"
+    StepId.Confirm -> "Result"
+}
+
 /** Reads the diagnosis off what PackageManager and, when present, shell reported. */
 fun diagnose(
     clusterDebug: PackageFacts?,

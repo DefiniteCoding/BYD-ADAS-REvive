@@ -35,7 +35,10 @@ import com.definitecoding.bydadasrevive.shell.ShellState
 import java.io.File
 import java.util.Date
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -86,7 +89,6 @@ data class ReviveState(
     val ack: Boolean? = null,
     val console: List<String> = emptyList(),
     val allApps: List<InstalledApp> = emptyList(),
-    val exportMessage: String? = null,
     val runStartedAt: Long = System.currentTimeMillis(),
 ) {
     /**
@@ -146,6 +148,10 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _pendingRestart = MutableStateFlow(false)
     val pendingRestart: StateFlow<Boolean> = _pendingRestart.asStateFlow()
+
+    /** One-shot text for the snackbar. Results that matter go in the console too. */
+    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val messages: SharedFlow<String> = _messages.asSharedFlow()
 
     /** A resumed run has just accepted the notice, so it is not asked again. */
     private var resumedRun = false
@@ -209,6 +215,23 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
 
     fun acknowledge224(value: Boolean) {
         _state.value = _state.value.copy(acknowledged224 = value)
+    }
+
+    /** Jumps straight to a step, clearing later results when it is a step backwards. */
+    fun goTo(step: StepId) {
+        val state = _state.value
+        if (!state.steps.contains(step)) {
+            log("cannot jump to $step: not part of this run")
+            return
+        }
+        val backwards = state.steps.indexOf(step) < state.steps.indexOf(state.currentStep)
+        val next = if (backwards) clearAfter(state, step) else state
+        _state.value = next.copy(currentStep = step)
+        log("step: $step")
+    }
+
+    fun dismissEscalationNotice() {
+        _state.value = _state.value.copy(escalationReason = null)
     }
 
     fun advance() {
@@ -706,7 +729,7 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
             is ExportResult.Failed -> result.message
         }
         log("export: $message")
-        _state.value = _state.value.copy(exportMessage = message)
+        _messages.tryEmit(message)
     }
 
     fun copyToClipboard(label: String, text: String) {
@@ -714,6 +737,7 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
             .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
         log("copied $label to clipboard")
+        _messages.tryEmit("Copied $label to the clipboard")
     }
 
     // ---------------------------------------------------------------- plumbing

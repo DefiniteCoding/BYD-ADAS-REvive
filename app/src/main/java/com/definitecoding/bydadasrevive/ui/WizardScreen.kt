@@ -20,13 +20,20 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.horizontalScroll as horizontalScrollModifier
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarHostStateDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -35,9 +42,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.WarningButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -47,6 +59,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -57,6 +72,7 @@ import com.definitecoding.bydadasrevive.flow.Diagnosis
 import com.definitecoding.bydadasrevive.flow.StepId
 import com.definitecoding.bydadasrevive.flow.Triage
 import com.definitecoding.bydadasrevive.flow.UserPath
+import com.definitecoding.bydadasrevive.flow.shortTitleOf
 import com.definitecoding.bydadasrevive.flow.titleOf
 import com.definitecoding.bydadasrevive.log.DEVELOPER_EMAIL
 import com.definitecoding.bydadasrevive.pkg.PackageFacts
@@ -87,14 +103,24 @@ fun WizardScreen(viewModel: ReviveViewModel, onPickApk: () -> Unit, onClose: () 
     val state by viewModel.state.collectAsStateWithLifecycle()
     val shell by viewModel.shellState.collectAsStateWithLifecycle()
     var showConsole by remember { mutableStateOf(false) }
+    val snackbar = remember { SnackbarHostState() }
 
-    Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().padding(20.dp)) {
+    // Results the user should notice even with the console hidden.
+    LaunchedEffect(Unit) {
+        viewModel.messages.collect { snackbar.showSnackbar(it) }
+    }
+
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(snackbar) },
+    ) { insets ->
+        Column(Modifier.fillMaxSize().padding(insets).padding(20.dp)) {
             WizardHeader(
                 state = state,
                 shell = shell,
                 showConsole = showConsole,
                 onToggleConsole = { showConsole = !showConsole },
+                viewModel = viewModel,
             )
             Spacer(Modifier.heightIn(min = 12.dp))
 
@@ -138,8 +164,8 @@ private fun WizardHeader(
     shell: ShellState,
     showConsole: Boolean,
     onToggleConsole: () -> Unit,
+    viewModel: ReviveViewModel,
 ) {
-    val index = state.steps.indexOf(state.currentStep).coerceAtLeast(0)
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -158,6 +184,8 @@ private fun WizardHeader(
                 CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(12.dp))
             }
+            LogMenu(viewModel)
+            Spacer(Modifier.width(8.dp))
             TextButton(onClick = onToggleConsole, modifier = Tap) {
                 Text(if (showConsole) "Hide details" else "Show details")
             }
@@ -177,22 +205,103 @@ private fun WizardHeader(
             )
         }
         if (state.currentStep != StepId.Blocked) {
-            Spacer(Modifier.heightIn(min = 8.dp))
-            Text(
-                "Step ${index + 1} of ${state.steps.size}",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            LinearProgressIndicator(
-                progress = { (index + 1f) / state.steps.size.coerceAtLeast(1) },
-                modifier = Modifier.fillMaxWidth(),
+            Spacer(Modifier.heightIn(min = 10.dp))
+            StepperRail(state, viewModel)
+        }
+        state.escalationReason?.let { reason ->
+            Spacer(Modifier.heightIn(min = 10.dp))
+            Banner(
+                kind = StatusKind.Warning,
+                text = "This step needs adb access: $reason",
+                onDismiss = viewModel::dismissEscalationNotice,
             )
         }
-        state.escalationReason?.let {
-            Spacer(Modifier.heightIn(min = 8.dp))
-            Mono("adb access became necessary: $it", Warn)
+    }
+}
+
+@Composable
+private fun LogMenu(viewModel: ReviveViewModel) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        TextButton(onClick = { open = true }, modifier = Tap) { Text("Log") }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text("Save to Downloads") },
+                onClick = { open = false; viewModel.saveLogToDownloads() },
+            )
+            DropdownMenuItem(
+                text = { Text("Share") },
+                onClick = { open = false; viewModel.shareLog() },
+            )
+            DropdownMenuItem(
+                text = { Text("Email the developer") },
+                onClick = { open = false; viewModel.mailLog() },
+            )
+            DropdownMenuItem(
+                text = { Text("Copy to clipboard") },
+                onClick = { open = false; viewModel.copyLog() },
+            )
         }
-        state.exportMessage?.let { Mono(it) }
+    }
+}
+
+/**
+ * Named steps rather than "step 3 of 8", since a 1920px screen has room to show what
+ * is coming. Tapping a completed step goes back to it.
+ */
+@Composable
+private fun StepperRail(state: ReviveState, viewModel: ReviveViewModel) {
+    val current = state.steps.indexOf(state.currentStep)
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScrollModifier(rememberScrollState()),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        state.steps.forEachIndexed { index, step ->
+            val done = current >= 0 && index < current
+            val active = index == current
+            val colour = when {
+                active -> MaterialTheme.colorScheme.primary
+                done -> Ok
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clickable(enabled = done) { viewModel.goTo(step) }
+                    .background(
+                        if (active) colour.copy(alpha = 0.16f) else Color.Transparent,
+                        RoundedCornerShape(50),
+                    )
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                if (done) {
+                    Icon(
+                        Icons.Filled.CheckCircle,
+                        contentDescription = "completed",
+                        tint = Ok,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                } else {
+                    Text(
+                        "${index + 1}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colour,
+                        fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(
+                    shortTitleOf(step),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = colour,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                )
+            }
+            if (index < state.steps.lastIndex) {
+                Text("-", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     }
 }
 
@@ -207,8 +316,6 @@ private fun WizardFooter(state: ReviveState, shell: ShellState, viewModel: Reviv
         ) {
             Text("Back")
         }
-        Spacer(Modifier.width(12.dp))
-        ExportRow(viewModel)
         Spacer(Modifier.weight(1f))
         if (state.currentStep != StepId.Confirm && state.currentStep != StepId.Blocked) {
             Button(
@@ -219,16 +326,6 @@ private fun WizardFooter(state: ReviveState, shell: ShellState, viewModel: Reviv
                 Text("Next")
             }
         }
-    }
-}
-
-@Composable
-private fun ExportRow(viewModel: ReviveViewModel) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = viewModel::saveLogToDownloads, modifier = Tap) { Text("Save log") }
-        TextButton(onClick = viewModel::shareLog, modifier = Tap) { Text("Share") }
-        TextButton(onClick = viewModel::mailLog, modifier = Tap) { Text("Email dev") }
-        TextButton(onClick = viewModel::copyLog, modifier = Tap) { Text("Copy") }
     }
 }
 
@@ -332,26 +429,29 @@ private fun ParkedStep(state: ReviveState, viewModel: ReviveViewModel) {
 @Composable
 private fun PathChoiceStep(state: ReviveState, viewModel: ReviveViewModel) {
     Text(
-        "Two ways through this. You can change your mind later, and the simple path will ask " +
-            "for adb only if a step turns out to need it.",
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        "Pick either one. You can change your mind later, and the quick way will stop and ask " +
+            "for more access only if it actually needs it.",
+        style = MaterialTheme.typography.bodyLarge,
     )
     ChoiceCard(
         selected = state.path == UserPath.Simple,
-        title = "Simple",
-        body = "No adb setup. The app installs with Android's own installer and opens cluster " +
-            "debug with a normal intent. Fewer checks, and it may stop to ask for adb if your " +
-            "car will not allow one of the steps without it.",
+        title = "Just fix it (recommended)",
+        body = "Nothing to set up. Android's own installer does the work and you confirm each " +
+            "step on screen.",
         onClick = { viewModel.choosePath(UserPath.Simple) },
     )
     ChoiceCard(
         selected = state.path == UserPath.Advanced,
-        title = "Advanced",
-        body = "Grants adb shell access first. Everything works, the checks are deeper " +
-            "(dumpsys, pidof, removed-for-user detection) and nothing gets stuck. Requires " +
-            "\"$TCPIP_COMMAND\" to have been run once since the last reboot.",
+        title = "Give the app full access first",
+        body = "A little setup, then every step works and the app can check more thoroughly. " +
+            "Choose this if the quick way got stuck for you before.",
         onClick = { viewModel.choosePath(UserPath.Advanced) },
+    )
+    TechnicalNote(
+        "Just fix it   PackageInstaller sessions plus a plain startActivity, no shell.\n" +
+            "Full access   an adb client on 127.0.0.1:5555, which enables dumpsys, pidof,\n" +
+            "              pm uninstall --user 0 and removed-for-user detection.\n" +
+            "              Needs \"$TCPIP_COMMAND\" run once since the last reboot."
     )
 }
 
@@ -364,10 +464,15 @@ private fun AdbGrantStep(state: ReviveState, shell: ShellState, viewModel: Reviv
         }
         else -> {
             Text(
-                "Tap Request access. The car will show an \"Allow debugging?\" dialog - tick " +
-                    "Always allow so it stops asking. If nothing happens, adbd is not listening " +
-                    "yet and you need to run \"$TCPIP_COMMAND\" once in your adb shell app.",
+                "Tap Request access, then look at the car's screen. It will ask \"Allow " +
+                    "debugging?\" - tick Always allow so it stops asking every time.",
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                "If nothing appears on screen, the car is not listening yet. Run this line once " +
+                    "in your adb shell app and try again.",
                 style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
@@ -445,10 +550,9 @@ private fun TriageStep(state: ReviveState, viewModel: ReviveViewModel) {
 @Composable
 private fun ChooseApkStep(state: ReviveState, viewModel: ReviveViewModel, onPickApk: () -> Unit) {
     Text(
-        "Point the app at the $ADAS_PACKAGE APK. It is read and checked before anything is " +
-            "installed, so you know what is in the file first.",
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        "Find the APK file on the car. The app opens it and tells you what is inside before " +
+            "anything is installed, so there are no surprises.",
+        style = MaterialTheme.typography.bodyLarge,
     )
     OutlinedTextField(
         value = state.apkPath,
@@ -483,32 +587,36 @@ private fun ChooseApkStep(state: ReviveState, viewModel: ReviveViewModel, onPick
             if (state.apkIsCorrectPackage) Ok else Bad,
         )
         if (!state.apkIsCorrectPackage) {
-            Text(
-                "That file is ${info.packageName}, not $ADAS_PACKAGE. Pick a different one.",
-                color = Bad,
-                style = MaterialTheme.typography.bodyMedium,
+            Banner(
+                kind = StatusKind.Failure,
+                text = "That file is ${info.packageName}, which is a different app. You need " +
+                    "the $ADAS_PACKAGE file.",
             )
+            OutlinedButton(onClick = onPickApk, modifier = Tap) { Text("Pick another file") }
         }
         if (state.removalRequired) {
-            Text(
-                "This file is older than what is installed, and Android's installer cannot " +
-                    "downgrade. The next step will remove the installed copy first.",
-                color = Warn,
-                style = MaterialTheme.typography.bodyMedium,
+            Banner(
+                kind = StatusKind.Warning,
+                text = "This file is older than the version on the car, and Android will not " +
+                    "install an older version over a newer one. The next step removes the " +
+                    "current one first.",
             )
         }
         if (state.downgradeWithoutRemoval) {
-            Text(
-                "This file is older than the copy now on the car, and this run has no removal " +
-                    "step because nothing was installed when it started. Start over and the " +
-                    "wizard will offer the removal it needs.",
-                color = Bad,
-                style = MaterialTheme.typography.bodyMedium,
+            Banner(
+                kind = StatusKind.Failure,
+                text = "This file is older than the version now on the car. This run has no " +
+                    "removal step, because nothing was installed when it started.",
             )
             OutlinedButton(onClick = viewModel::restartRun, enabled = !state.busy, modifier = Tap) {
-                Text("Start over")
+                Text("Start over so removal is offered")
             }
         }
+        TechnicalNote(
+            "Read with PackageManager.getPackageArchiveInfo before any install.\n" +
+                "PackageInstaller has no setRequestDowngrade for ordinary apps, so a lower\n" +
+                "versionCode has to be preceded by an uninstall."
+        )
     }
 }
 
@@ -556,11 +664,29 @@ private fun UninstallStep(state: ReviveState, shell: ShellState, viewModel: Revi
         }
     }
 
-    state.uninstallOutput?.let {
-        val failed = !gone
-        Mono(it, if (failed) Bad else Ok)
+    state.uninstallOutput?.let { output ->
+        Banner(
+            kind = if (gone) StatusKind.Success else StatusKind.Failure,
+            text = if (gone) {
+                "It is gone from the car."
+            } else {
+                "The car still reports it as installed."
+            },
+        )
+        Mono(output, if (gone) Ok else Bad)
+        if (!gone && shell !is ShellState.Connected) {
+            OutlinedButton(onClick = viewModel::connect, enabled = !state.busy, modifier = Tap) {
+                Text("Get full access and try the other route")
+            }
+        }
     }
     FactsBlock(state.adasNow)
+    TechnicalNote(
+        "Remove it            PackageInstaller.uninstall, with the platform's own dialog.\n" +
+            "Remove for this user  pm uninstall --user 0 $ADAS_PACKAGE, over the shell\n" +
+            "                      channel. Leaves any /system copy in place, which is what\n" +
+            "                      works on a system app."
+    )
 
     confirming?.let { removal ->
         RemovalDialog(
@@ -589,20 +715,22 @@ private fun InstallStep(state: ReviveState, viewModel: ReviveViewModel) {
         style = MaterialTheme.typography.bodyLarge,
     )
     if (state.diagnosis is Diagnosis.AdasRemovedForUser) {
-        Text(
-            "This package is still on /system and only removed for your user, so " +
-                "\"pm install-existing\" is the lighter option if you have shell.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Banner(
+            kind = StatusKind.Info,
+            text = "This app was never fully deleted from the car, only hidden from your " +
+                "profile. Restoring it is quicker than installing the file.",
         )
         OutlinedButton(onClick = viewModel::installExisting, enabled = !state.busy, modifier = Tap) {
-            Text("pm install-existing")
+            Text("Restore the hidden copy")
         }
+        TechnicalNote("pm install-existing $ADAS_PACKAGE, over the shell channel.")
     }
     if ((state.diagnosis as? Diagnosis.AdasPresent)?.disabled == true) {
+        Banner(kind = StatusKind.Warning, text = "The app is installed but switched off.")
         OutlinedButton(onClick = viewModel::enablePackage, enabled = !state.busy, modifier = Tap) {
-            Text("pm enable (it is disabled)")
+            Text("Switch it back on")
         }
+        TechnicalNote("pm enable $ADAS_PACKAGE, over the shell channel.")
     }
     Button(
         onClick = viewModel::install,
@@ -613,17 +741,49 @@ private fun InstallStep(state: ReviveState, viewModel: ReviveViewModel) {
         Text("Install")
     }
     state.installPhase?.let { Busy(it, state.installProgress) }
-    state.installOutput?.let {
-        val success = it.equals("Success", ignoreCase = true)
-        Mono(it, if (success) Ok else Bad)
+    state.installOutput?.let { output ->
+        val success = output.equals("Success", ignoreCase = true)
+        Banner(
+            kind = if (success) StatusKind.Success else StatusKind.Failure,
+            text = if (success) {
+                "Installed. The next step confirms it really landed."
+            } else {
+                "Android refused the install."
+            },
+        )
+        Mono(output, if (success) Ok else Bad)
         if (!success) {
+            val clash = output.contains("CONFLICT", ignoreCase = true)
             Text(
-                "CONFLICT means the signature does not match the copy on the car, or the version " +
-                    "code is lower than the installed one. For a signature clash you need an APK " +
-                    "pulled from a BYD head unit; for a downgrade, go back and remove first.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                if (clash) {
+                    "Two things cause this. Either the file was signed by someone other than " +
+                        "BYD, in which case you need one pulled off a BYD head unit, or it is " +
+                        "an older version than the one on the car, which has to be removed first."
+                } else {
+                    "The line above is what Android reported. Send the log if it means nothing " +
+                        "to you and it can be looked at."
+                },
+                style = MaterialTheme.typography.bodyMedium,
             )
+            Row {
+                if (state.steps.contains(StepId.Uninstall)) {
+                    OutlinedButton(
+                        onClick = { viewModel.goTo(StepId.Uninstall) },
+                        enabled = !state.busy,
+                        modifier = Tap,
+                    ) {
+                        Text("Go back and remove it first")
+                    }
+                    Spacer(Modifier.width(8.dp))
+                }
+                OutlinedButton(
+                    onClick = { viewModel.goTo(StepId.ChooseApk) },
+                    enabled = !state.busy,
+                    modifier = Tap,
+                ) {
+                    Text("Choose a different file")
+                }
+            }
         }
     }
 }
@@ -631,10 +791,9 @@ private fun InstallStep(state: ReviveState, viewModel: ReviveViewModel) {
 @Composable
 private fun VerifyStep(state: ReviveState, viewModel: ReviveViewModel) {
     Text(
-        "A success message is not proof a fresh copy landed. The version code and the last " +
-            "update time are.",
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        "\"Success\" on the last step is not proof by itself. What proves it is the version and " +
+            "the time the app was last updated.",
+        style = MaterialTheme.typography.bodyLarge,
     )
     Button(onClick = viewModel::recheck, enabled = !state.busy, modifier = Tap) { Text("Check now") }
     FactsBlock(state.adasAfter)
@@ -644,10 +803,13 @@ private fun VerifyStep(state: ReviveState, viewModel: ReviveViewModel) {
         val changed = before.lastUpdateTime != after.lastUpdateTime ||
             before.versionCode != after.versionCode ||
             before.installed != after.installed
-        Text(
-            if (changed) "Changed since we started: yes" else "Changed since we started: no",
-            color = if (changed) Ok else Warn,
-            style = MaterialTheme.typography.bodyLarge,
+        Banner(
+            kind = if (changed) StatusKind.Success else StatusKind.Warning,
+            text = if (changed) {
+                "This is a different copy from the one there when you started."
+            } else {
+                "Nothing changed since you started, so the install may not have taken effect."
+            },
         )
     }
     state.shellProbe?.let { Mono(it) }
@@ -706,20 +868,28 @@ private fun LaunchStep(state: ReviveState, viewModel: ReviveViewModel) {
             Text("Copy command")
         }
     }
-    state.launchOutput?.let {
-        Mono(it, if (state.launchSucceeded) Ok else Bad)
+    state.launchOutput?.let { output ->
+        Banner(
+            kind = if (state.launchSucceeded) StatusKind.Success else StatusKind.Failure,
+            text = if (state.launchSucceeded) {
+                "It opened. Tap 224 in that window, then come back."
+            } else {
+                "It did not open, so there is nothing to tap yet."
+            },
+        )
+        Mono(output, if (state.launchSucceeded) Ok else Bad)
     }
     if (state.launchOutput != null && !state.launchSucceeded) {
         Text(
-            "It did not open, so there is nothing to tap yet. Granting adb access is the usual " +
-                "fix, because this activity often refuses to start for an ordinary app.",
+            "Giving the app full access is the usual fix: this screen often refuses to open " +
+                "for an ordinary app.",
             style = MaterialTheme.typography.bodyMedium,
-            color = Bad,
         )
         OutlinedButton(onClick = viewModel::connect, enabled = !state.busy, modifier = Tap) {
-            Text("Grant adb access and retry")
+            Text("Get full access and try again")
         }
     }
+    TechnicalNote("$CLUSTER_COMMAND over the shell channel, or an explicit startActivity.")
 }
 
 @Composable
@@ -809,6 +979,75 @@ private fun ConfirmStep(state: ReviveState, viewModel: ReviveViewModel, onClose:
 
 // ------------------------------------------------------------------ shared pieces
 
+enum class StatusKind { Success, Warning, Failure, Info }
+
+private fun iconFor(kind: StatusKind): ImageVector = when (kind) {
+    StatusKind.Success -> Icons.Filled.CheckCircle
+    StatusKind.Warning -> Icons.Filled.Warning
+    StatusKind.Failure -> Icons.Filled.Error
+    StatusKind.Info -> Icons.Filled.Info
+}
+
+@Composable
+private fun colourFor(kind: StatusKind): Color = when (kind) {
+    StatusKind.Success -> Ok
+    StatusKind.Warning -> Warn
+    StatusKind.Failure -> Bad
+    StatusKind.Info -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+private fun wordFor(kind: StatusKind): String = when (kind) {
+    StatusKind.Success -> "Done"
+    StatusKind.Warning -> "Careful"
+    StatusKind.Failure -> "Problem"
+    StatusKind.Info -> "Note"
+}
+
+/**
+ * Outcome line with an icon and a leading word, so meaning does not rest on colour
+ * alone. Anything raw from the car goes in a Mono block underneath.
+ */
+@Composable
+private fun Banner(kind: StatusKind, text: String, onDismiss: (() -> Unit)? = null) {
+    val colour = colourFor(kind)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colour.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(iconFor(kind), contentDescription = wordFor(kind), tint = colour)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                wordFor(kind),
+                style = MaterialTheme.typography.labelLarge,
+                color = colour,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(text, style = MaterialTheme.typography.bodyMedium, color = colour)
+        }
+        if (onDismiss != null) {
+            TextButton(onClick = onDismiss, modifier = Tap) {
+                Icon(Icons.Filled.Close, contentDescription = "dismiss", tint = colour)
+            }
+        }
+    }
+}
+
+/** Keeps the command names and the Android specifics out of the main reading path. */
+@Composable
+private fun TechnicalNote(text: String) {
+    var open by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth()) {
+        TextButton(onClick = { open = !open }, modifier = Tap) {
+            Text(if (open) "Hide the technical detail" else "What this does, technically")
+        }
+        if (open) Mono(text)
+    }
+}
+
 private enum class Removal { ForUser, Platform }
 
 @Composable
@@ -877,7 +1116,10 @@ private fun ChoiceCard(selected: Boolean, title: String, body: String, onClick: 
 
 @Composable
 private fun Busy(phase: String, fraction: Float?) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.semantics { contentDescription = "Working: $phase" },
+    ) {
         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
         Spacer(Modifier.width(10.dp))
         Text(phase, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)

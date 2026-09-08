@@ -6,8 +6,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -17,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -24,12 +28,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 /** The name that appears in the liability wording. Swap for a legal entity if you form one. */
 const val DEVELOPER_NAME = "DefiniteCoding"
 
 const val DISCLAIMER_VERSION = 1
+
+/** What the notice actually means, for someone who will not read the clauses. */
+val DISCLAIMER_SUMMARY = listOf(
+    "This app is not made by BYD and has nothing to do with BYD.",
+    "It changes software on your car and opens a factory diagnostic screen.",
+    "That can affect driver-assistance features, may void warranty, and may not be reversible.",
+    "Nothing this app tells you is proof that a safety system works. Only your own checks are.",
+    "If something goes wrong, that is on you, not on the developer.",
+)
 
 val DISCLAIMER_TEXT = """
 BYD ADAS REvive is an unofficial, community-built tool, provided free of charge, AS IS and
@@ -79,17 +93,55 @@ fun DisclaimerDialog(
     onDecline: () -> Unit,
 ) {
     var suppress by remember { mutableStateOf(false) }
+    val scroll = rememberScrollState()
+    // Accept stays shut until the terms have actually gone past.
+    val readToEnd by remember {
+        derivedStateOf { scroll.maxValue == 0 || scroll.value >= scroll.maxValue - 8 }
+    }
 
     AlertDialog(
         onDismissRequest = { /* Deliberately not dismissible: it needs an answer. */ },
-        title = { Text("Read this first") },
+        title = { Text("Before you use this") },
         text = {
-            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                Text(DISCLAIMER_TEXT, style = MaterialTheme.typography.bodyMedium)
-                Spacer(Modifier.heightIn(min = 12.dp))
+            Column {
+                DISCLAIMER_SUMMARY.forEach { line ->
+                    Row(Modifier.padding(bottom = 6.dp)) {
+                        Text("-", style = MaterialTheme.typography.bodyLarge)
+                        Spacer(Modifier.width(8.dp))
+                        Text(line, style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+                Spacer(Modifier.heightIn(min = 10.dp))
+                Text(
+                    "The full terms:",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Column(
+                    Modifier
+                        .heightIn(max = 260.dp)
+                        .background(
+                            MaterialTheme.colorScheme.surfaceVariant,
+                            RoundedCornerShape(8.dp),
+                        )
+                        .padding(12.dp)
+                        .verticalScroll(scroll)
+                ) {
+                    Text(DISCLAIMER_TEXT, style = MaterialTheme.typography.bodyMedium)
+                }
+                if (!readToEnd) {
+                    Text(
+                        "Scroll to the end of the terms to continue.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Warn,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+                // Outside the scrolling region, so it cannot be scrolled out of sight.
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 ) {
                     Checkbox(checked = suppress, onCheckedChange = { suppress = it })
                     Spacer(Modifier.width(8.dp))
@@ -100,6 +152,7 @@ fun DisclaimerDialog(
         confirmButton = {
             Button(
                 onClick = { onAccept(suppress) },
+                enabled = readToEnd,
                 colors = ButtonDefaults.buttonColors(containerColor = Ok, contentColor = Color.Black),
                 modifier = Modifier.defaultMinSize(minHeight = TAP_TARGET_HEIGHT),
             ) {

@@ -10,7 +10,9 @@ import androidx.compose.ui.unit.sp
 
 val Ok = Color(0xFF3DDC97)
 val Warn = Color(0xFFFFC857)
-val Bad = Color(0xFFFF6B6B)
+// Material's dark-theme error tone. The old #FF6B6B sat at about 4.3:1 on
+// surfaceVariant, under the 4.5:1 floor at the sizes it is used.
+val Bad = Color(0xFFFFB4AB)
 
 private val ReviveColors = darkColorScheme(
     primary = Color(0xFF4CC2FF),
