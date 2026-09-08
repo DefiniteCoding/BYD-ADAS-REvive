@@ -103,16 +103,25 @@ data class ReviveState(
     /** True when the APK on disk is the package this app is here to fix. */
     val apkIsCorrectPackage: Boolean get() = apkInfo?.packageName == ADAS_PACKAGE
 
-    /**
-     * PackageInstaller cannot downgrade, so a lower version code in the file than on the
-     * car turns the removal step from a suggestion into a prerequisite.
-     */
-    val removalRequired: Boolean
+    /** What is on the car right now, which is the only honest basis for a version compare. */
+    val installedVersionCode: Long? get() = adasNow?.takeIf { it.installed }?.versionCode
+
+    /** PackageInstaller cannot downgrade, so this decides whether removal is needed. */
+    val isDowngrade: Boolean
         get() {
-            val installed = (diagnosis as? Diagnosis.AdasPresent)?.installedVersionCode ?: return false
             val candidate = apkInfo?.versionCode ?: return false
+            val installed = installedVersionCode ?: return false
             return candidate < installed
         }
+
+    /** A downgrade this run can resolve, because it has a removal step. */
+    val removalRequired: Boolean get() = isDowngrade && steps.contains(StepId.Uninstall)
+
+    /**
+     * A downgrade this run cannot resolve: the flow was pinned when nothing was
+     * installed, so it has no removal step to offer. Starting over re-diagnoses.
+     */
+    val downgradeWithoutRemoval: Boolean get() = isDowngrade && !steps.contains(StepId.Uninstall)
 }
 
 class ReviveViewModel(application: Application) : AndroidViewModel(application) {
@@ -307,7 +316,9 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
 
     // ---------------------------------------------------------------- detection
 
-    fun refreshPackages() = launchBusy {
+    fun refreshPackages() = launchBusy { refreshPackagesNow() }
+
+    private suspend fun refreshPackagesNow() {
         val adas = inspector.facts(ADAS_PACKAGE)
         val cluster = inspector.facts(CLUSTER_PACKAGE)
         val apps = withContext(Dispatchers.IO) { inspector.installedApps() }
@@ -495,7 +506,7 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
             installPhase = null,
             installProgress = null,
         )
-        refreshPackages()
+        refreshPackagesNow()
     }
 
     fun uninstall() = launchBusy {
@@ -507,7 +518,7 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
         }
         log("uninstall: $rendered")
         _state.value = _state.value.copy(uninstallOutput = rendered)
-        refreshPackages()
+        refreshPackagesNow()
         if (outcome is InstallOutcome.Failure && _state.value.adasNow?.installed == true) {
             escalateToShell("the platform uninstall did not remove $ADAS_PACKAGE")
         }
@@ -520,7 +531,7 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
         }
         val output = runShell("pm uninstall --user 0 $ADAS_PACKAGE")
         _state.value = _state.value.copy(uninstallOutput = output.trim())
-        refreshPackages()
+        refreshPackagesNow()
     }
 
     /** For a package that is on /system but removed for this user. */
@@ -531,7 +542,7 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
         }
         val output = runShell("pm install-existing $ADAS_PACKAGE")
         _state.value = _state.value.copy(installOutput = output.trim())
-        refreshPackages()
+        refreshPackagesNow()
     }
 
     fun enablePackage() = launchBusy {
@@ -541,7 +552,7 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
         }
         val output = runShell("pm enable $ADAS_PACKAGE")
         log("enable: ${output.trim()}")
-        refreshPackages()
+        refreshPackagesNow()
     }
 
     // ---------------------------------------------------------------- verify and launch

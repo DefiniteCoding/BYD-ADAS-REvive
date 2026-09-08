@@ -66,7 +66,7 @@ private fun canAdvance(state: ReviveState, shell: ShellState): Boolean = when (s
     StepId.AdbGrant -> shell is ShellState.Connected
     // Working fine has no Next: the only way on is the explicit "Reinstall anyway".
     StepId.Triage -> state.triage != Triage.Unanswered && state.triage != Triage.WorkingFine
-    StepId.ChooseApk -> state.apkIsCorrectPackage
+    StepId.ChooseApk -> state.apkIsCorrectPackage && !state.downgradeWithoutRemoval
     StepId.Uninstall -> !state.removalRequired || state.adasNow?.installed == false
     StepId.Install -> state.installOutput == "Success"
     StepId.Verify -> state.adasAfter?.installed == true
@@ -451,6 +451,18 @@ private fun ChooseApkStep(state: ReviveState, viewModel: ReviveViewModel, onPick
                 color = Warn,
                 style = MaterialTheme.typography.bodyMedium,
             )
+        }
+        if (state.downgradeWithoutRemoval) {
+            Text(
+                "This file is older than the copy now on the car, and this run has no removal " +
+                    "step because nothing was installed when it started. Start over and the " +
+                    "wizard will offer the removal it needs.",
+                color = Bad,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            OutlinedButton(onClick = viewModel::restartRun, enabled = !state.busy) {
+                Text("Start over")
+            }
         }
     }
 }
