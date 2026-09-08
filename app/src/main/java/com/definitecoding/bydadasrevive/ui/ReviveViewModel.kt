@@ -9,6 +9,8 @@ import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.definitecoding.bydadasrevive.install.ApkInstaller
+import com.definitecoding.bydadasrevive.install.InstallOutcome
 import com.definitecoding.bydadasrevive.log.RunLog
 import com.definitecoding.bydadasrevive.log.RunRecord
 import com.definitecoding.bydadasrevive.pkg.InstalledApp
@@ -17,6 +19,7 @@ import com.definitecoding.bydadasrevive.pkg.PackageInspector
 import com.definitecoding.bydadasrevive.shell.ShellChannel
 import com.definitecoding.bydadasrevive.shell.ShellState
 import java.io.File
+import java.io.InputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -27,12 +30,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-const val ADAS_PACKAGE = "com.byd.adas"
+const val ADAS_PACKAGE = "com.byd.sr"
 const val CLUSTER_PACKAGE = "com.byd.clusterdebug"
 const val CLUSTER_ACTIVITY = "com.byd.clusterdebug.MainActivity"
 const val CLUSTER_COMMAND = "am start -n $CLUSTER_PACKAGE/$CLUSTER_ACTIVITY"
 const val TCPIP_COMMAND = "adb tcpip 5555"
 const val DOWNLOAD_DIR = "/sdcard/Download"
+const val DEFAULT_APK_PATH = "$DOWNLOAD_DIR/com.byd.sr-1.0.72.apk"
 
 data class ReviveState(
     val host: String = "127.0.0.1",
@@ -44,8 +48,10 @@ data class ReviveState(
     val shellProbeBefore: String? = null,
     val shellProbeAfter: String? = null,
     val apkCandidates: List<String> = emptyList(),
-    val selectedApk: String? = null,
+    val apkPath: String = DEFAULT_APK_PATH,
+    val pickedUri: Uri? = null,
     val installOutput: String? = null,
+    val uninstallOutput: String? = null,
     val launchOutput: String? = null,
     val adasPidAfter: String? = null,
     val ack: Boolean? = null,
@@ -59,6 +65,7 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     private val inspector = PackageInspector(application.packageManager)
     private val shell = ShellChannel(application.filesDir)
     private val runLog = RunLog(application.filesDir)
+    private val installer = ApkInstaller(application)
 
     private val _state = MutableStateFlow(ReviveState())
 
@@ -131,49 +138,98 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
         log("found ${candidates.size} apk(s) in $DOWNLOAD_DIR")
     }
 
-    fun selectApk(path: String) {
-        _state.value = _state.value.copy(selectedApk = path)
-        log("selected $path")
+    fun setApkPath(path: String) {
+        _state.value = _state.value.copy(apkPath = path, pickedUri = null)
+    }
+
+    /** Step 3, Files app path. The picked Uri streams straight into the install session. */
+    fun setPickedUri(uri: Uri) {
+        _state.value = _state.value.copy(pickedUri = uri)
+        log("picked $uri")
     }
 
     /**
-     * Step 3, Files app path. SAF hands back a content Uri that shell cannot open, so
-     * the bytes are staged to a path shell can pass to pm. Whether shell may read
-     * Android/data on this build is not guaranteed; if it cannot, pm install says so
-     * and the Downloads path above is the one to use.
+     * Installs through PackageInstaller as this app, with a system confirmation dialog.
+     * Note this route cannot downgrade, so a lower version code than the installed one
+     * means uninstalling first.
      */
-    fun stageFromUri(uri: Uri) = launchBusy {
-        val context = getApplication<Application>()
-        val staged = withContext(Dispatchers.IO) {
-            runCatching {
-                val target = File(
-                    context.getExternalFilesDir(null) ?: context.filesDir,
-                    "staged.apk",
-                )
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    target.outputStream().use { output -> input.copyTo(output) }
-                } ?: error("Could not open $uri")
-                target.absolutePath
-            }
-        }
-        staged.fold(
-            onSuccess = { path ->
-                _state.value = _state.value.copy(selectedApk = path)
-                log("staged picked file to $path")
-            },
-            onFailure = { error -> log("staging failed: ${error.message}") },
-        )
-    }
-
     fun install() = launchBusy {
-        val path = _state.value.selectedApk ?: run {
-            log("no apk selected")
+        val context = getApplication<Application>()
+        val picked = _state.value.pickedUri
+        val path = _state.value.apkPath.trim()
+
+        val source: (() -> InputStream)? = when {
+            picked != null -> {
+                { context.contentResolver.openInputStream(picked) ?: error("cannot open $picked") }
+            }
+            path.isBlank() -> null
+            else -> resolvePath(path)
+        }
+
+        if (source == null) {
+            _state.value = _state.value.copy(installOutput = "No readable APK. Pick one with the Files app.")
             return@launchBusy
         }
-        // -r reinstalls in place, -d allows the downgrade this APK may be relative to
-        // the version the car shipped with.
-        val output = runShell("pm install -r -d '$path'")
-        _state.value = _state.value.copy(installOutput = output.trim())
+
+        log("installing ${picked ?: path} via PackageInstaller")
+        val outcome = installer.install(ADAS_PACKAGE, source)
+        val rendered = when (outcome) {
+            InstallOutcome.Success -> "Success"
+            is InstallOutcome.Failure -> outcome.message
+        }
+        log("install: $rendered")
+        _state.value = _state.value.copy(installOutput = rendered)
+    }
+
+    /**
+     * Scoped storage keeps this app out of another app's files in Downloads, so a raw
+     * path is read directly when possible and otherwise copied in by shell, which can
+     * write to this app's own external directory.
+     */
+    private suspend fun resolvePath(path: String): (() -> InputStream)? {
+        val direct = File(path)
+        if (direct.canRead()) {
+            log("reading $path directly")
+            return { direct.inputStream() }
+        }
+
+        if (!shell.isConnected) {
+            log("cannot read $path and no shell to copy it with")
+            return null
+        }
+
+        val context = getApplication<Application>()
+        val staged = File(context.getExternalFilesDir(null) ?: context.filesDir, "staged.apk")
+        runShell("cp '$path' '${staged.absolutePath}' && chmod 644 '${staged.absolutePath}'")
+        if (!staged.canRead() || staged.length() == 0L) {
+            log("shell could not copy $path into ${staged.parent}")
+            return null
+        }
+        log("copied ${staged.length()} bytes to ${staged.absolutePath}")
+        return { staged.inputStream() }
+    }
+
+    /** Step 1 option: hand the uninstall to the platform, with its own dialog. */
+    fun uninstall() = launchBusy {
+        log("uninstalling $ADAS_PACKAGE via PackageInstaller")
+        val outcome = installer.uninstall(ADAS_PACKAGE)
+        val rendered = when (outcome) {
+            InstallOutcome.Success -> "Uninstalled"
+            is InstallOutcome.Failure -> outcome.message
+        }
+        log("uninstall: $rendered")
+        _state.value = _state.value.copy(uninstallOutput = rendered)
+        refreshPackages()
+    }
+
+    /**
+     * The route that works on a system app: it stays on /system but stops existing for
+     * this user, which is what frees the package name for a fresh install.
+     */
+    fun uninstallForUser() = launchBusy {
+        val output = runShell("pm uninstall --user 0 $ADAS_PACKAGE")
+        _state.value = _state.value.copy(uninstallOutput = output.trim())
+        refreshPackages()
     }
 
     /** Step 4: re-check after the install, both PackageManager and shell. */
@@ -214,7 +270,7 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
                 RunRecord(
                     startedAt = snapshot.runStartedAt,
                     adasBefore = snapshot.adasBefore?.let(::describe) ?: "unknown",
-                    apkPath = snapshot.selectedApk,
+                    apkPath = snapshot.pickedUri?.toString() ?: snapshot.apkPath,
                     installOutput = snapshot.installOutput,
                     adasAfter = snapshot.adasAfter?.let(::describe),
                     clusterLaunchOutput = snapshot.launchOutput,

@@ -13,7 +13,7 @@ Everything runs on the car. No laptop, no USB cable, no root.
 
 ## Why this exists
 
-On some Chinese-spec cars `com.byd.adas` gets superseded by the stock ADAS package
+On some Chinese-spec cars `com.byd.sr` gets superseded by the stock ADAS package
 under a different name, and the instrument cluster stops showing the ADAS view. The
 fix is known but tedious: find an adb shell, reinstall the APK by hand, launch a
 hidden debug activity, tap one button in it, then go look at the cluster. This app is
@@ -40,17 +40,18 @@ You need three things:
    already working on the head unit.
 2. **`adb tcpip 5555` run since the last reboot.** This is what the app connects to.
    See [How the shell channel works](#how-the-shell-channel-works).
-3. **The `com.byd.adas` APK in `/sdcard/Download`.** It must be signed with the same
-   key as the copy already on your car, otherwise the install is refused. An APK you
-   pulled off a BYD head unit with `adb pull` will match. One rebuilt or re-signed by
-   someone else will not.
+3. **The `com.byd.sr` APK somewhere on the car.** `/sdcard/Download` is the default,
+   and the path is editable in the app. It must be signed with the same key as the copy
+   already on your car, otherwise the install is refused. An APK you pulled off a BYD
+   head unit with `adb pull` will match. One rebuilt or re-signed by someone else will
+   not.
 
 ## The flow
 
 ```mermaid
 flowchart TD
-    A["0 - Connect<br/>adb client to 127.0.0.1:5555"] --> B["1 - Check<br/>is com.byd.adas installed?"]
-    B --> C["2 - Reinstall<br/>pm install -r -d"]
+    A["0 - Connect<br/>adb client to 127.0.0.1:5555"] --> B["1 - Check<br/>is com.byd.sr installed?"]
+    B -->|"optionally uninstall first"| C["2 - Install<br/>PackageInstaller session"]
     C --> D["3 - Check again<br/>version and lastUpdateTime changed?"]
     D --> E["4 - Open cluster debug<br/>am start -n com.byd.clusterdebug/.MainActivity"]
     E --> F["You tap the button labelled 224"]
@@ -88,32 +89,45 @@ Two views, because they disagree in a way that matters:
 **All packages** expands into a filterable list of everything installed, which is
 handy for finding the package name of whatever superseded your ADAS app.
 
-### 2. Reinstall the APK
+When the package *is* installed you get two removal options, because installing over
+it in place is not always possible:
 
-Two ways to pick the file:
+- **Uninstall for this user (shell)** runs `pm uninstall --user 0 com.byd.sr`. The APK
+  stays on `/system`, but the package stops existing for your user, which frees the
+  package name for a fresh install of *any* version code. This is the one that works on
+  a system app.
+- **Uninstall (system dialog)** hands it to Android. On a system app this usually only
+  removes updates, or fails outright.
 
-- **Browse /sdcard/Download** - lists APKs over the shell channel. No storage
-  permission needed and the path goes straight to `pm`. Use this one.
-- **Pick with Files app** - the standard Android document picker, for an APK stored
-  somewhere else. The bytes get staged into the app's own external files directory
-  first, which shell may or may not be able to read on your build. If it cannot, the
-  install output says so and you should use the Downloads path instead.
+Both ask for confirmation first. Neither is required if you are installing an equal or
+higher version code.
+
+### 2. Install the APK
+
+The path field defaults to `/sdcard/Download/com.byd.sr-1.0.72.apk` and is editable.
+Two other ways to fill it:
+
+- **Browse /sdcard/Download** lists the APKs there over the shell channel and sets the
+  path when you tap one.
+- **Pick with Files app** opens the standard document picker. The picked file streams
+  straight into the install session, no staging and no storage permission.
 
 ![Choosing the APK](docs/images/step2-apk-list.png)
 
-The install runs as `pm install -r -d`, as shell:
+The install itself is a **PackageInstaller** session, run as this app rather than as
+shell, so Android shows its own confirmation dialog. If the path is one scoped storage
+will not let this app open directly, it is copied in by shell first and the console says
+so.
 
-- `-r` reinstalls over the existing copy,
-- `-d` allows a downgrade, which matters because an APK pulled from a newer firmware
-  can carry a *lower* version code than the stock package on your car,
-- running as shell means no "install unknown apps" permission and no Play Protect
-  dialog.
+One limitation worth knowing: `setRequestDowngrade` is system-only, so this route
+**cannot** replace a higher version code with a lower one. For that, remove the package
+in step 1 first, then install.
 
 ![Install succeeded](docs/images/step2-install-success.png)
 
 ### 3. Check again
 
-`Success` from `pm` is not by itself proof that a fresh copy landed. The version code
+A success status is not by itself proof that a fresh copy landed. The version code
 and `lastUpdateTime` are. The app compares them against what it recorded in step 1 and
 tells you plainly whether anything changed.
 
@@ -145,7 +159,7 @@ looking at it.
 
 What the app *can* prove, and does: the package is installed, its enabled state, its
 version code, that `lastUpdateTime` moved, and - over the shell channel - whether a
-process named `com.byd.adas` currently exists. That last one is a hint rather than a
+process named `com.byd.sr` currently exists. That last one is a hint rather than a
 verdict: a service running under a different process name will not match, so "no
 running process" next to a working cluster is a false negative, which is why it shows
 as a warning and not a failure.
@@ -163,10 +177,11 @@ thread when you are comparing a run that worked against one that did not.
 
 ## How the shell channel works
 
-The app needs shell-level privilege for three things: `pm install` without an
-unknown-sources prompt, `am start` on a possibly non-exported activity, and `dumpsys` /
-`pidof` for the checks. An Android app cannot run adb commands - it can only run a
-shell as its own unprivileged uid. So the app becomes an **adb client** instead and
+The app needs shell-level privilege for four things: `am start` on a possibly
+non-exported activity, `dumpsys` and `pidof` for the checks, `pm uninstall --user 0`
+on a system app, and reading an APK out of a directory scoped storage keeps this app
+out of. An Android app cannot run adb commands - it can only run a shell as its own
+unprivileged uid. So the app becomes an **adb client** instead and
 connects to the car's own adb daemon over loopback.
 
 ```mermaid
@@ -206,10 +221,12 @@ once per boot from your existing adb shell app.
 | `shell failed` / connection refused | Nothing is listening on 5555. Run `adb tcpip 5555`. |
 | `adbd is in wireless-debugging TLS mode` | adbd is on the TLS port. `adb tcpip 5555` switches it to legacy mode. |
 | `The car did not accept this app's adb key` | The "Allow debugging?" prompt was missed, dismissed, or denied. Tap Connect again and watch the car screen. |
-| `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | Your APK's signature does not match the copy on the car. Get one pulled from a BYD head unit. |
-| `INSTALL_FAILED_VERSION_DOWNGRADE` | Should not happen with `-d`. Report it with the console output. |
+| `CONFLICT (signature or version clash)` | Either the APK's signature does not match the copy on the car, or its version code is lower than the installed one. For a signature mismatch, get an APK pulled from a BYD head unit. For a downgrade, uninstall in step 1 first. |
+| `ABORTED (you dismissed the dialog)` | The system confirmation was cancelled. Tap Install again. |
+| `BLOCKED` | Something on the car is refusing the install, typically a device policy or a verifier. |
 | `Permission Denial ... not exported` on step 4 | You used **Direct intent** without a shell. Use **Run via shell**. |
-| Install output mentions the staged path | Shell could not read the staging directory on your build. Put the APK in `/sdcard/Download` and use **Browse**. |
+| `No readable APK` | This app cannot open that path and no shell was available to copy it. Connect the shell channel, or use **Pick with Files app**. |
+| Uninstall reports `DELETE_FAILED_INTERNAL_ERROR` | Expected on a system app via the system dialog. Use **Uninstall for this user (shell)**. |
 
 ## Build from source
 

@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -220,10 +221,44 @@ private fun ShellCard(state: ReviveState, shell: ShellState, viewModel: ReviveVi
     }
 }
 
+private enum class Removal { ForUser, Platform }
+
+@Composable
+private fun RemovalDialog(removal: Removal, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Remove $ADAS_PACKAGE?") },
+        text = {
+            Text(
+                when (removal) {
+                    Removal.ForUser ->
+                        "Runs \"pm uninstall --user 0 $ADAS_PACKAGE\". The APK stays on /system, " +
+                            "but the package stops existing for this user. This is the route that " +
+                            "works on a system app, and it frees the package name for a fresh " +
+                            "install of any version."
+                    Removal.Platform ->
+                        "Hands the uninstall to Android, which will show its own confirmation. " +
+                            "On a system app this usually only removes updates, or fails outright."
+                }
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(containerColor = Bad, contentColor = Color.Black),
+            ) {
+                Text("Remove")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
 @Composable
 private fun AdasStatusCard(state: ReviveState, viewModel: ReviveViewModel) {
     var showAll by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
+    var confirming by remember { mutableStateOf<Removal?>(null) }
 
     StepCard(
         number = 1,
@@ -240,7 +275,7 @@ private fun AdasStatusCard(state: ReviveState, viewModel: ReviveViewModel) {
         }
         state.shellProbeBefore?.let { Mono(it) }
 
-        Row {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedButton(onClick = viewModel::refreshPackages, enabled = !state.busy) {
                 Text("Refresh")
             }
@@ -248,6 +283,51 @@ private fun AdasStatusCard(state: ReviveState, viewModel: ReviveViewModel) {
             TextButton(onClick = { showAll = !showAll }) {
                 Text(if (showAll) "Hide all packages" else "All packages (${state.allApps.size})")
             }
+        }
+
+        // Only offered when the package is actually there, since a reinstall in place
+        // cannot downgrade and removing it first is the way around that.
+        if (state.adasBefore?.installed == true) {
+            Text(
+                "Installed. Reinstall in place from step 2, or remove it first if the APK you " +
+                    "have carries a lower version code.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row {
+                OutlinedButton(
+                    onClick = { confirming = Removal.ForUser },
+                    enabled = !state.busy,
+                ) {
+                    Text("Uninstall for this user (shell)")
+                }
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(
+                    onClick = { confirming = Removal.Platform },
+                    enabled = !state.busy,
+                ) {
+                    Text("Uninstall (system dialog)")
+                }
+            }
+            state.uninstallOutput?.let {
+                val failed = it.contains("Failure", true) || it.contains("FAILED", true) ||
+                    it.contains("FAILURE", true)
+                Mono(it, if (failed) Bad else Ok)
+            }
+        }
+
+        confirming?.let { removal ->
+            RemovalDialog(
+                removal = removal,
+                onDismiss = { confirming = null },
+                onConfirm = {
+                    confirming = null
+                    when (removal) {
+                        Removal.ForUser -> viewModel.uninstallForUser()
+                        Removal.Platform -> viewModel.uninstall()
+                    }
+                },
+            )
         }
 
         if (showAll) {
@@ -284,11 +364,19 @@ private fun AdasStatusCard(state: ReviveState, viewModel: ReviveViewModel) {
 private fun ReinstallCard(state: ReviveState, viewModel: ReviveViewModel, onPickApk: () -> Unit) {
     StepCard(
         number = 2,
-        title = "Reinstall the APK",
-        subtitle = "pm install -r -d, run as shell so no install-unknown-apps prompt and downgrades are allowed",
+        title = "Install the APK",
+        subtitle = "PackageInstaller, as this app. Android shows its own confirmation dialog.",
     ) {
+        OutlinedTextField(
+            value = state.apkPath,
+            onValueChange = viewModel::setApkPath,
+            label = { Text("apk path on the car") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
         Row {
-            Button(onClick = viewModel::listDownloadApks, enabled = !state.busy) {
+            OutlinedButton(onClick = viewModel::listDownloadApks, enabled = !state.busy) {
                 Text("Browse $DOWNLOAD_DIR")
             }
             Spacer(Modifier.width(8.dp))
@@ -298,8 +386,8 @@ private fun ReinstallCard(state: ReviveState, viewModel: ReviveViewModel, onPick
         if (state.apkCandidates.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 state.apkCandidates.forEach { path ->
-                    val selected = path == state.selectedApk
-                    TextButton(onClick = { viewModel.selectApk(path) }) {
+                    val selected = path == state.apkPath && state.pickedUri == null
+                    TextButton(onClick = { viewModel.setApkPath(path) }) {
                         Text(
                             (if (selected) "* " else "  ") + path,
                             color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
@@ -311,26 +399,32 @@ private fun ReinstallCard(state: ReviveState, viewModel: ReviveViewModel, onPick
             }
         }
 
-        state.selectedApk?.let {
-            Text("selected: $it", fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+        state.pickedUri?.let {
+            Text(
+                "using the picked file: $it",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.primary,
+            )
         }
 
         Button(
             onClick = viewModel::install,
-            enabled = !state.busy && state.selectedApk != null,
+            enabled = !state.busy && (state.pickedUri != null || state.apkPath.isNotBlank()),
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
         ) {
             Text("Install")
         }
 
         state.installOutput?.let {
-            val success = it.contains("Success", ignoreCase = true)
+            val success = it.equals("Success", ignoreCase = true)
             Mono(it, if (success) Ok else Bad)
             if (!success) {
                 Text(
-                    "INSTALL_FAILED_UPDATE_INCOMPATIBLE means the APK signature does not match the " +
-                        "copy already on the car. INSTALL_FAILED_VERSION_DOWNGRADE should not happen " +
-                        "with -d; anything else, read the raw line above.",
+                    "CONFLICT means the APK signature does not match the copy on the car, or its " +
+                        "version code is lower than the installed one. PackageInstaller cannot " +
+                        "downgrade, so for a lower version remove the package in step 1 first, " +
+                        "then install.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

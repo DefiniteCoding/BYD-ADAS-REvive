@@ -24,7 +24,7 @@ class MainActivity : ComponentActivity() {
                 }
                 val picker = rememberLauncherForActivityResult(
                     ActivityResultContracts.OpenDocument()
-                ) { uri -> if (uri != null) model.stageFromUri(uri) }
+                ) { uri -> if (uri != null) model.setPickedUri(uri) }
 
                 ReviveScreen(
                     viewModel = model,
