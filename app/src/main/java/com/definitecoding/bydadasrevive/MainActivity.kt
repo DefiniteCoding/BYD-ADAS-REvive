@@ -71,6 +71,7 @@ class MainActivity : ComponentActivity() {
                         WizardScreen(
                             viewModel = model,
                             onPickApk = { picker.launch(mimeTypes) },
+                            onClose = { finish() },
                         )
                         if (showDisclaimer) {
                             DisclaimerDialog(

@@ -29,6 +29,7 @@ import com.definitecoding.bydadasrevive.pkg.InstalledApp
 import com.definitecoding.bydadasrevive.pkg.PackageFacts
 import com.definitecoding.bydadasrevive.pkg.PackageInspector
 import com.definitecoding.bydadasrevive.pkg.readApk
+import com.definitecoding.bydadasrevive.adb.ShellResult
 import com.definitecoding.bydadasrevive.shell.ShellChannel
 import com.definitecoding.bydadasrevive.shell.ShellState
 import java.io.File
@@ -54,6 +55,7 @@ data class ReviveState(
     val busy: Boolean = false,
     val profile: CarProfile = CarProfile(),
     val diagnosis: Diagnosis = Diagnosis.Unknown,
+    val runDiagnosis: Diagnosis = Diagnosis.Unknown,
     val path: UserPath = UserPath.Unchosen,
     val triage: Triage = Triage.Unanswered,
     val shellEscalated: Boolean = false,
@@ -75,6 +77,7 @@ data class ReviveState(
     val installProgress: Float? = null,
     val uninstallOutput: String? = null,
     val launchOutput: String? = null,
+    val launchSucceeded: Boolean = false,
     val adasPidAfter: String? = null,
     val acknowledged224: Boolean = false,
     val ack: Boolean? = null,
@@ -83,7 +86,19 @@ data class ReviveState(
     val exportMessage: String? = null,
     val runStartedAt: Long = System.currentTimeMillis(),
 ) {
-    val steps: List<StepId> get() = stepsFor(diagnosis, path, triage, shellEscalated)
+    /**
+     * The step list must not change under the user, so it is derived from the diagnosis
+     * frozen when the run began rather than from the live one. An incompatible car is
+     * the exception: that always wins, whenever it is discovered.
+     */
+    val effectiveDiagnosis: Diagnosis
+        get() = when {
+            diagnosis is Diagnosis.NotCompatible -> diagnosis
+            runDiagnosis !is Diagnosis.Unknown -> runDiagnosis
+            else -> diagnosis
+        }
+
+    val steps: List<StepId> get() = stepsFor(effectiveDiagnosis, path, triage, shellEscalated)
 
     /** True when the APK on disk is the package this app is here to fix. */
     val apkIsCorrectPackage: Boolean get() = apkInfo?.packageName == ADAS_PACKAGE
@@ -122,6 +137,17 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         log("--- session start on ${_state.value.profile.describe()} ---")
+        prefs.takeSavedRun()?.let { saved ->
+            _state.value = _state.value.copy(
+                path = saved.path,
+                triage = saved.triage,
+                currentStep = saved.step,
+                apkPath = saved.apkPath,
+                acknowledged224 = saved.acknowledged224,
+                runStartedAt = saved.startedAt,
+            )
+            log("resumed the run at ${saved.step} after the restart")
+        }
         refreshPackages()
     }
 
@@ -144,8 +170,9 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     // ---------------------------------------------------------------- navigation
 
     fun choosePath(path: UserPath) {
-        _state.value = _state.value.copy(path = path)
-        log("path: ${path.name.lowercase()}")
+        val state = _state.value
+        _state.value = state.copy(path = path, runDiagnosis = state.diagnosis)
+        log("path: ${path.name.lowercase()}, run pinned to ${state.diagnosis}")
         if (path == UserPath.Advanced) connectIfNeeded()
         advance()
     }
@@ -163,16 +190,56 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     fun advance() {
         val state = _state.value
         val index = state.steps.indexOf(state.currentStep)
+        if (index < 0) return
         val next = state.steps.getOrNull(index + 1) ?: return
         _state.value = state.copy(currentStep = next)
         log("step: $next")
     }
 
+    /** Going back invalidates whatever the later steps produced, so it is cleared. */
     fun back() {
         val state = _state.value
         val index = state.steps.indexOf(state.currentStep)
-        val previous = state.steps.getOrNull(index - 1) ?: return
-        _state.value = state.copy(currentStep = previous)
+        if (index <= 0) return
+        val previous = state.steps[index - 1]
+        _state.value = clearAfter(state, previous).copy(currentStep = previous)
+        log("step: $previous (later results cleared)")
+    }
+
+    /** Drops every result produced by a step later than [step]. */
+    private fun clearAfter(state: ReviveState, step: StepId): ReviveState {
+        val order = state.steps
+        fun isLater(candidate: StepId) = order.indexOf(candidate) > order.indexOf(step)
+        return state.copy(
+            uninstallOutput = state.uninstallOutput.takeUnless { isLater(StepId.Uninstall) },
+            installOutput = state.installOutput.takeUnless { isLater(StepId.Install) },
+            installPhase = null,
+            installProgress = null,
+            adasAfter = state.adasAfter.takeUnless { isLater(StepId.Verify) },
+            acknowledged224 = state.acknowledged224 && !isLater(StepId.Warn224),
+            launchOutput = state.launchOutput.takeUnless { isLater(StepId.Launch) },
+            launchSucceeded = state.launchSucceeded && !isLater(StepId.Launch),
+            ack = state.ack.takeUnless { isLater(StepId.Confirm) },
+        )
+    }
+
+    /** Clears the wizard back to its first step, keeping the console and the log. */
+    fun restartRun() {
+        val state = _state.value
+        _state.value = ReviveState(
+            host = state.host,
+            port = state.port,
+            profile = state.profile,
+            diagnosis = state.diagnosis,
+            clusterDebug = state.clusterDebug,
+            adasNow = state.adasNow,
+            adasBefore = state.adasNow,
+            allApps = state.allApps,
+            console = state.console,
+            apkPath = state.apkPath,
+        )
+        log("--- run reset ---")
+        refreshPackages()
     }
 
     // ---------------------------------------------------------------- shell
@@ -200,7 +267,18 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
                 log("connected: $banner")
                 if (firstGrant) {
                     runCatching { grantMarker.createNewFile() }
-                    log("access granted - restarting so every check runs with shell")
+                    val snapshot = _state.value
+                    prefs.saveRun(
+                        SavedRun(
+                            path = snapshot.path,
+                            triage = snapshot.triage,
+                            step = snapshot.currentStep,
+                            apkPath = snapshot.apkPath,
+                            acknowledged224 = snapshot.acknowledged224,
+                            startedAt = snapshot.runStartedAt,
+                        )
+                    )
+                    log("access granted - restarting, and this run will be resumed at ${snapshot.currentStep}")
                     _pendingRestart.value = true
                 } else {
                     probeWithShell()
@@ -250,10 +328,24 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     private fun rediagnose() {
         val state = _state.value
         val diagnosis = diagnose(state.clusterDebug, state.adasNow, state.profile, state.removedForUser)
-        if (diagnosis == state.diagnosis) return
-        log("diagnosis: $diagnosis")
+        val pinned = pinFor(state, diagnosis)
+        if (diagnosis == state.diagnosis && pinned == state.runDiagnosis) return
         val step = if (diagnosis is Diagnosis.NotCompatible) StepId.Blocked else state.currentStep
-        _state.value = state.copy(diagnosis = diagnosis, currentStep = step)
+        _state.value = state.copy(diagnosis = diagnosis, runDiagnosis = pinned, currentStep = step)
+        // Logged after the write, since log() itself publishes state.
+        if (diagnosis != state.diagnosis) log("diagnosis: $diagnosis")
+        if (pinned != state.runDiagnosis) log("run pinned to $pinned")
+    }
+
+    /**
+     * A run resumed after the restart is already past the path choice, so it never got
+     * to pin its diagnosis. It gets pinned to the first real reading instead.
+     */
+    private fun pinFor(state: ReviveState, diagnosis: Diagnosis): Diagnosis = when {
+        state.runDiagnosis !is Diagnosis.Unknown -> state.runDiagnosis
+        state.currentStep == StepId.PathChoice -> Diagnosis.Unknown
+        diagnosis is Diagnosis.Unknown -> Diagnosis.Unknown
+        else -> diagnosis
     }
 
     /**
@@ -291,11 +383,15 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setApkPath(path: String) {
-        _state.value = _state.value.copy(apkPath = path, pickedUri = null, apkInfo = null, apkError = null)
+        val state = _state.value
+        _state.value = clearAfter(state, StepId.ChooseApk)
+            .copy(apkPath = path, pickedUri = null, apkInfo = null, apkError = null)
     }
 
     fun setPickedUri(uri: Uri) {
-        _state.value = _state.value.copy(pickedUri = uri, apkInfo = null, apkError = null)
+        val state = _state.value
+        _state.value = clearAfter(state, StepId.ChooseApk)
+            .copy(pickedUri = uri, apkInfo = null, apkError = null)
         log("picked $uri")
         inspectApk()
     }
@@ -459,12 +555,20 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
 
     /** Shell start works whether or not the activity is exported; the intent may not. */
     fun launchClusterDebug() = launchBusy {
-        if (shell.isConnected) {
-            val output = runShell(CLUSTER_COMMAND)
-            _state.value = _state.value.copy(launchOutput = output.trim())
+        if (!shell.isConnected) {
+            launchClusterDebugDirect()
             return@launchBusy
         }
-        launchClusterDebugDirect()
+        val result = runShellResult(CLUSTER_COMMAND)
+        // am start exits 0 even when it refuses, so the text has to be read too.
+        val refused = listOf("Error", "Denial", "Exception", "does not exist")
+            .any { result.output.contains(it, ignoreCase = true) }
+        val ok = result.exitCode == 0 && !refused
+        _state.value = _state.value.copy(
+            launchOutput = result.output.trim().ifBlank { if (ok) "Started" else "no output" },
+            launchSucceeded = ok,
+        )
+        if (!ok) log("cluster debug did not start")
     }
 
     fun launchClusterDebugDirect() {
@@ -476,11 +580,17 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
         result.fold(
             onSuccess = {
                 log("cluster debug launched by intent")
-                _state.value = _state.value.copy(launchOutput = "Opened by direct intent")
+                _state.value = _state.value.copy(
+                    launchOutput = "Opened by direct intent",
+                    launchSucceeded = true,
+                )
             },
             onFailure = { error ->
                 log("direct intent refused: ${error.message}")
-                _state.value = _state.value.copy(launchOutput = "direct intent failed: ${error.message}")
+                _state.value = _state.value.copy(
+                    launchOutput = "direct intent failed: ${error.message}",
+                    launchSucceeded = false,
+                )
                 escalateToShell("$CLUSTER_ACTIVITY will not start from an ordinary app")
             },
         )
@@ -559,17 +669,19 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
 
     // ---------------------------------------------------------------- plumbing
 
-    private suspend fun runShell(command: String): String {
+    private suspend fun runShell(command: String): String = runShellResult(command).output
+
+    private suspend fun runShellResult(command: String): ShellResult {
         log("$ $command")
         return shell.run(command).fold(
             onSuccess = { result ->
                 log(result.output.ifBlank { "(no output)" } + (result.exitCode?.let { " [rc=$it]" } ?: ""))
-                result.output
+                result
             },
             onFailure = { error ->
                 val message = "error: ${error.message}"
                 log(message)
-                message
+                ShellResult(message, null)
             },
         )
     }

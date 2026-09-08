@@ -71,12 +71,12 @@ private fun canAdvance(state: ReviveState, shell: ShellState): Boolean = when (s
     StepId.Install -> state.installOutput == "Success"
     StepId.Verify -> state.adasAfter?.installed == true
     StepId.Warn224 -> state.acknowledged224
-    StepId.Launch -> state.launchOutput != null
+    StepId.Launch -> state.launchSucceeded
     StepId.Confirm -> false
 }
 
 @Composable
-fun WizardScreen(viewModel: ReviveViewModel, onPickApk: () -> Unit) {
+fun WizardScreen(viewModel: ReviveViewModel, onPickApk: () -> Unit, onClose: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val shell by viewModel.shellState.collectAsStateWithLifecycle()
     var showConsole by remember { mutableStateOf(false) }
@@ -107,7 +107,7 @@ fun WizardScreen(viewModel: ReviveViewModel, onPickApk: () -> Unit) {
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.SemiBold,
                         )
-                        StepBody(state, shell, viewModel, onPickApk)
+                        StepBody(state, shell, viewModel, onPickApk, onClose)
                     }
                 }
 
@@ -229,6 +229,7 @@ private fun StepBody(
     shell: ShellState,
     viewModel: ReviveViewModel,
     onPickApk: () -> Unit,
+    onClose: () -> Unit,
 ) {
     when (state.currentStep) {
         StepId.Blocked -> BlockedStep(state, viewModel)
@@ -241,7 +242,7 @@ private fun StepBody(
         StepId.Verify -> VerifyStep(state, viewModel)
         StepId.Warn224 -> Warn224Step(state, viewModel)
         StepId.Launch -> LaunchStep(state, viewModel)
-        StepId.Confirm -> ConfirmStep(state, viewModel)
+        StepId.Confirm -> ConfirmStep(state, viewModel, onClose)
     }
 }
 
@@ -640,14 +641,23 @@ private fun LaunchStep(state: ReviveState, viewModel: ReviveViewModel) {
         }
     }
     state.launchOutput?.let {
-        val failed = it.contains("Error", true) || it.contains("Denial", true) ||
-            it.contains("failed", true)
-        Mono(it, if (failed) Bad else Ok)
+        Mono(it, if (state.launchSucceeded) Ok else Bad)
+    }
+    if (state.launchOutput != null && !state.launchSucceeded) {
+        Text(
+            "It did not open, so there is nothing to tap yet. Granting adb access is the usual " +
+                "fix, because this activity often refuses to start for an ordinary app.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Bad,
+        )
+        OutlinedButton(onClick = viewModel::connect, enabled = !state.busy) {
+            Text("Grant adb access and retry")
+        }
     }
 }
 
 @Composable
-private fun ConfirmStep(state: ReviveState, viewModel: ReviveViewModel) {
+private fun ConfirmStep(state: ReviveState, viewModel: ReviveViewModel, onClose: () -> Unit) {
     var note by remember { mutableStateOf("") }
     Text(
         "Look at the instrument cluster. Did it switch to the ADAS view or the large " +
@@ -696,6 +706,7 @@ private fun ConfirmStep(state: ReviveState, viewModel: ReviveViewModel) {
         }
     }
     state.ack?.let {
+        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         Text(
             if (it) {
                 "Recorded as working. Save or email the log if you want to share what worked."
@@ -706,6 +717,27 @@ private fun ConfirmStep(state: ReviveState, viewModel: ReviveViewModel) {
             color = if (it) Ok else Bad,
             fontWeight = FontWeight.SemiBold,
         )
+        Row {
+            Button(
+                onClick = viewModel::saveLogToDownloads,
+                enabled = !state.busy,
+                modifier = Modifier.heightIn(min = 56.dp),
+            ) {
+                Text("Save the log")
+            }
+            Spacer(Modifier.width(12.dp))
+            OutlinedButton(
+                onClick = viewModel::restartRun,
+                enabled = !state.busy,
+                modifier = Modifier.heightIn(min = 56.dp),
+            ) {
+                Text("Start over")
+            }
+            Spacer(Modifier.width(12.dp))
+            OutlinedButton(onClick = onClose, modifier = Modifier.heightIn(min = 56.dp)) {
+                Text("Close")
+            }
+        }
     }
 }
 

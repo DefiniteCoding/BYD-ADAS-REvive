@@ -1,6 +1,5 @@
 package com.definitecoding.bydadasrevive.ui
 
-import android.content.Context
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -72,28 +71,6 @@ By continuing you confirm that you have read and understood this notice, that yo
 responsibility for your use of this application, and that you agree to these terms. If you do
 not agree, do not use this application.
 """.trimIndent()
-
-/** Acceptance is remembered per disclaimer version, so a reworded notice reappears. */
-class Prefs(context: Context) {
-
-    private val prefs = context.getSharedPreferences("revive", Context.MODE_PRIVATE)
-
-    var disclaimerSuppressedVersion: Int
-        get() = prefs.getInt(KEY_SUPPRESSED, 0)
-        set(value) = prefs.edit().putInt(KEY_SUPPRESSED, value).apply()
-
-    var lastAcceptedAt: Long
-        get() = prefs.getLong(KEY_ACCEPTED_AT, 0)
-        set(value) = prefs.edit().putLong(KEY_ACCEPTED_AT, value).apply()
-
-    val shouldShowDisclaimer: Boolean
-        get() = disclaimerSuppressedVersion < DISCLAIMER_VERSION
-
-    private companion object {
-        const val KEY_SUPPRESSED = "disclaimer_suppressed_version"
-        const val KEY_ACCEPTED_AT = "disclaimer_accepted_at"
-    }
-}
 
 @Composable
 fun DisclaimerDialog(
