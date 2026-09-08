@@ -1,7 +1,6 @@
 package com.definitecoding.bydadasrevive.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
