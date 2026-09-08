@@ -1,0 +1,20 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Speedometer arc plus needle: the cluster view coming back. -->
+    <path
+        android:pathData="M30,72 A24,24 0 1,1 78,72"
+        android:strokeColor="#4CC2FF"
+        android:strokeWidth="6"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M54,72 L68,52"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M54,72 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0"
+        android:fillColor="#FFFFFF" />
+</vector>
