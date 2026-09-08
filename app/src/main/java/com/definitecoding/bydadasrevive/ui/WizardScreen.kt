@@ -1,6 +1,8 @@
 package com.definitecoding.bydadasrevive.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,9 +13,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -31,6 +35,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -59,9 +64,12 @@ import com.definitecoding.bydadasrevive.pkg.PackageFacts
 import com.definitecoding.bydadasrevive.shell.ShellState
 import java.util.Date
 
+private val Tap = Modifier.defaultMinSize(minHeight = TAP_TARGET_HEIGHT)
+
 /** Next is live only when the step it belongs to has actually been satisfied. */
 private fun canAdvance(state: ReviveState, shell: ShellState): Boolean = when (state.currentStep) {
     StepId.Blocked -> false
+    StepId.Parked -> state.parkedConfirmed
     StepId.PathChoice -> state.path != UserPath.Unchosen
     StepId.AdbGrant -> shell is ShellState.Connected
     // Working fine has no Next: the only way on is the explicit "Reinstall anyway".
@@ -99,6 +107,7 @@ fun WizardScreen(viewModel: ReviveViewModel, onPickApk: () -> Unit, onClose: () 
                     Column(
                         modifier = Modifier
                             .padding(24.dp)
+                            .widthIn(max = CONTENT_MAX_WIDTH)
                             .verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
@@ -149,7 +158,7 @@ private fun WizardHeader(
                 CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(12.dp))
             }
-            TextButton(onClick = onToggleConsole) {
+            TextButton(onClick = onToggleConsole, modifier = Tap) {
                 Text(if (showConsole) "Hide details" else "Show details")
             }
             Spacer(Modifier.width(8.dp))
@@ -194,7 +203,7 @@ private fun WizardFooter(state: ReviveState, shell: ShellState, viewModel: Reviv
         OutlinedButton(
             onClick = viewModel::back,
             enabled = index > 0 && !state.busy,
-            modifier = Modifier.heightIn(min = 52.dp),
+            modifier = Tap,
         ) {
             Text("Back")
         }
@@ -205,7 +214,7 @@ private fun WizardFooter(state: ReviveState, shell: ShellState, viewModel: Reviv
             Button(
                 onClick = viewModel::advance,
                 enabled = canAdvance(state, shell) && !state.busy,
-                modifier = Modifier.heightIn(min = 52.dp),
+                modifier = Tap,
             ) {
                 Text("Next")
             }
@@ -216,10 +225,10 @@ private fun WizardFooter(state: ReviveState, shell: ShellState, viewModel: Reviv
 @Composable
 private fun ExportRow(viewModel: ReviveViewModel) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = viewModel::saveLogToDownloads) { Text("Save log") }
-        TextButton(onClick = viewModel::shareLog) { Text("Share") }
-        TextButton(onClick = viewModel::mailLog) { Text("Email dev") }
-        TextButton(onClick = viewModel::copyLog) { Text("Copy") }
+        TextButton(onClick = viewModel::saveLogToDownloads, modifier = Tap) { Text("Save log") }
+        TextButton(onClick = viewModel::shareLog, modifier = Tap) { Text("Share") }
+        TextButton(onClick = viewModel::mailLog, modifier = Tap) { Text("Email dev") }
+        TextButton(onClick = viewModel::copyLog, modifier = Tap) { Text("Copy") }
     }
 }
 
@@ -233,6 +242,7 @@ private fun StepBody(
 ) {
     when (state.currentStep) {
         StepId.Blocked -> BlockedStep(state, viewModel)
+        StepId.Parked -> ParkedStep(state, viewModel)
         StepId.PathChoice -> PathChoiceStep(state, viewModel)
         StepId.AdbGrant -> AdbGrantStep(state, shell, viewModel)
         StepId.Triage -> TriageStep(state, viewModel)
@@ -280,11 +290,42 @@ private fun BlockedStep(state: ReviveState, viewModel: ReviveViewModel) {
         }
     )
     Row {
-        OutlinedButton(onClick = viewModel::connect, enabled = !state.busy) { Text("Try adb anyway") }
+        OutlinedButton(onClick = viewModel::connect, enabled = !state.busy, modifier = Tap) { Text("Try adb anyway") }
         Spacer(Modifier.width(8.dp))
-        OutlinedButton(onClick = viewModel::refreshPackages, enabled = !state.busy) { Text("Re-check") }
+        OutlinedButton(onClick = viewModel::refreshPackages, enabled = !state.busy, modifier = Tap) { Text("Re-check") }
     }
     AllPackages(state)
+}
+
+@Composable
+private fun ParkedStep(state: ReviveState, viewModel: ReviveViewModel) {
+    Text(
+        "Everything from here on changes software on your car and opens a factory " +
+            "diagnostic screen. None of it is safe to do while driving, and some of it " +
+            "takes the ADAS app away for a minute or two.",
+        style = MaterialTheme.typography.bodyLarge,
+    )
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .background(Warn.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+            .padding(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = state.parkedConfirmed, onCheckedChange = viewModel::confirmParked)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "The vehicle is parked, in P, in a safe place, and I am not driving",
+                style = MaterialTheme.typography.bodyLarge,
+                color = Warn,
+            )
+        }
+    }
+    Text(
+        "The app cannot read your gear selector or your speed, so this is on you.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable
@@ -345,7 +386,7 @@ private fun AdbGrantStep(state: ReviveState, shell: ShellState, viewModel: Reviv
                 )
             }
             Row {
-                Button(onClick = viewModel::connect, enabled = !state.busy) { Text("Request access") }
+                Button(onClick = viewModel::connect, enabled = !state.busy, modifier = Tap) { Text("Request access") }
                 Spacer(Modifier.width(8.dp))
                 OutlinedButton(onClick = { viewModel.copyToClipboard("adb tcpip", TCPIP_COMMAND) }) {
                     Text("Copy \"$TCPIP_COMMAND\"")
@@ -390,7 +431,7 @@ private fun TriageStep(state: ReviveState, viewModel: ReviveViewModel) {
             style = MaterialTheme.typography.bodyLarge,
             color = Ok,
         )
-        OutlinedButton(onClick = viewModel::advance, enabled = !state.busy) {
+        OutlinedButton(onClick = viewModel::advance, enabled = !state.busy, modifier = Tap) {
             Text("Reinstall anyway")
         }
     }
@@ -413,17 +454,17 @@ private fun ChooseApkStep(state: ReviveState, viewModel: ReviveViewModel, onPick
         modifier = Modifier.fillMaxWidth(),
     )
     Row {
-        Button(onClick = viewModel::inspectApk, enabled = !state.busy) { Text("Read this file") }
+        Button(onClick = viewModel::inspectApk, enabled = !state.busy, modifier = Tap) { Text("Read this file") }
         Spacer(Modifier.width(8.dp))
-        OutlinedButton(onClick = onPickApk) { Text("Pick with Files app") }
+        OutlinedButton(onClick = onPickApk, modifier = Tap) { Text("Pick with Files app") }
         Spacer(Modifier.width(8.dp))
-        OutlinedButton(onClick = viewModel::listDownloadApks, enabled = !state.busy) {
+        OutlinedButton(onClick = viewModel::listDownloadApks, enabled = !state.busy, modifier = Tap) {
             Text("List $DOWNLOAD_DIR")
         }
     }
     state.apkCandidates.forEach { path ->
-        TextButton(onClick = { viewModel.setApkPath(path) }) {
-            Text(path, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+        TextButton(onClick = { viewModel.setApkPath(path) }, modifier = Tap) {
+            Text(path, fontFamily = FontFamily.Monospace, fontSize = 15.sp)
         }
     }
     state.installPhase?.let { Busy(it, null) }
@@ -460,7 +501,7 @@ private fun ChooseApkStep(state: ReviveState, viewModel: ReviveViewModel, onPick
                 color = Bad,
                 style = MaterialTheme.typography.bodyMedium,
             )
-            OutlinedButton(onClick = viewModel::restartRun, enabled = !state.busy) {
+            OutlinedButton(onClick = viewModel::restartRun, enabled = !state.busy, modifier = Tap) {
                 Text("Start over")
             }
         }
@@ -485,7 +526,7 @@ private fun UninstallStep(state: ReviveState, shell: ShellState, viewModel: Revi
             color = if (state.removalRequired) Warn else MaterialTheme.colorScheme.onSurface,
         )
         Row {
-            Button(onClick = { confirming = Removal.Platform }, enabled = !state.busy) {
+            Button(onClick = { confirming = Removal.Platform }, enabled = !state.busy, modifier = Tap) {
                 Text("Remove it")
             }
             Spacer(Modifier.width(8.dp))
@@ -494,6 +535,11 @@ private fun UninstallStep(state: ReviveState, shell: ShellState, viewModel: Revi
                 enabled = !state.busy && shell is ShellState.Connected,
             ) {
                 Text("Remove for this user (shell)")
+            }
+        }
+        if (!state.removalRequired) {
+            OutlinedButton(onClick = viewModel::advance, enabled = !state.busy, modifier = Tap) {
+                Text("Skip removal and install over it")
             }
         }
         if (shell !is ShellState.Connected) {
@@ -544,12 +590,12 @@ private fun InstallStep(state: ReviveState, viewModel: ReviveViewModel) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        OutlinedButton(onClick = viewModel::installExisting, enabled = !state.busy) {
+        OutlinedButton(onClick = viewModel::installExisting, enabled = !state.busy, modifier = Tap) {
             Text("pm install-existing")
         }
     }
     if ((state.diagnosis as? Diagnosis.AdasPresent)?.disabled == true) {
-        OutlinedButton(onClick = viewModel::enablePackage, enabled = !state.busy) {
+        OutlinedButton(onClick = viewModel::enablePackage, enabled = !state.busy, modifier = Tap) {
             Text("pm enable (it is disabled)")
         }
     }
@@ -557,7 +603,7 @@ private fun InstallStep(state: ReviveState, viewModel: ReviveViewModel) {
         onClick = viewModel::install,
         enabled = !state.busy && info != null,
         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-        modifier = Modifier.heightIn(min = 56.dp),
+        modifier = Tap,
     ) {
         Text("Install")
     }
@@ -585,7 +631,7 @@ private fun VerifyStep(state: ReviveState, viewModel: ReviveViewModel) {
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    Button(onClick = viewModel::recheck, enabled = !state.busy) { Text("Check now") }
+    Button(onClick = viewModel::recheck, enabled = !state.busy, modifier = Tap) { Text("Check now") }
     FactsBlock(state.adasAfter)
     val before = state.adasBefore
     val after = state.adasAfter
@@ -633,7 +679,7 @@ private fun Warn224Step(state: ReviveState, viewModel: ReviveViewModel) {
 
 @Composable
 private fun LaunchStep(state: ReviveState, viewModel: ReviveViewModel) {
-    Text(CLUSTER_COMMAND, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+    Text(CLUSTER_COMMAND, fontFamily = FontFamily.Monospace, fontSize = 15.sp)
     Text(
         "The window opens on top of this app. Tap 224, then come back and press Next.",
         style = MaterialTheme.typography.bodyMedium,
@@ -643,7 +689,7 @@ private fun LaunchStep(state: ReviveState, viewModel: ReviveViewModel) {
         Button(
             onClick = viewModel::launchClusterDebug,
             enabled = !state.busy,
-            modifier = Modifier.heightIn(min = 56.dp),
+            modifier = Tap,
         ) {
             Text("Open cluster debug")
         }
@@ -662,7 +708,7 @@ private fun LaunchStep(state: ReviveState, viewModel: ReviveViewModel) {
             style = MaterialTheme.typography.bodyMedium,
             color = Bad,
         )
-        OutlinedButton(onClick = viewModel::connect, enabled = !state.busy) {
+        OutlinedButton(onClick = viewModel::connect, enabled = !state.busy, modifier = Tap) {
             Text("Grant adb access and retry")
         }
     }
@@ -703,7 +749,7 @@ private fun ConfirmStep(state: ReviveState, viewModel: ReviveViewModel, onClose:
             onClick = { viewModel.confirm(true, note.ifBlank { null }) },
             enabled = !state.busy,
             colors = ButtonDefaults.buttonColors(containerColor = Ok, contentColor = Color.Black),
-            modifier = Modifier.heightIn(min = 56.dp),
+            modifier = Tap,
         ) {
             Text("Yes, it works")
         }
@@ -712,7 +758,7 @@ private fun ConfirmStep(state: ReviveState, viewModel: ReviveViewModel, onClose:
             onClick = { viewModel.confirm(false, note.ifBlank { null }) },
             enabled = !state.busy,
             colors = ButtonDefaults.buttonColors(containerColor = Bad, contentColor = Color.Black),
-            modifier = Modifier.heightIn(min = 56.dp),
+            modifier = Tap,
         ) {
             Text("No, still broken")
         }
@@ -733,7 +779,7 @@ private fun ConfirmStep(state: ReviveState, viewModel: ReviveViewModel, onClose:
             Button(
                 onClick = viewModel::saveLogToDownloads,
                 enabled = !state.busy,
-                modifier = Modifier.heightIn(min = 56.dp),
+                modifier = Tap,
             ) {
                 Text("Save the log")
             }
@@ -741,12 +787,12 @@ private fun ConfirmStep(state: ReviveState, viewModel: ReviveViewModel, onClose:
             OutlinedButton(
                 onClick = viewModel::restartRun,
                 enabled = !state.busy,
-                modifier = Modifier.heightIn(min = 56.dp),
+                modifier = Tap,
             ) {
                 Text("Start over")
             }
             Spacer(Modifier.width(12.dp))
-            OutlinedButton(onClick = onClose, modifier = Modifier.heightIn(min = 56.dp)) {
+            OutlinedButton(onClick = onClose, modifier = Tap) {
                 Text("Close")
             }
         }
@@ -783,7 +829,7 @@ private fun RemovalDialog(removal: Removal, onDismiss: () -> Unit, onConfirm: ()
                 Text("Remove")
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss, modifier = Tap) { Text("Cancel") } },
     )
 }
 
@@ -797,23 +843,25 @@ private fun ChoiceCard(selected: Boolean, title: String, body: String, onClick: 
                 MaterialTheme.colorScheme.surfaceVariant
             }
         ),
-        modifier = Modifier.fillMaxWidth(),
+        // The whole card is the target. A small button on a card the size of a hand is
+        // the wrong thing to ask someone to hit in a car.
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
     ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = selected, onClick = onClick)
+            Spacer(Modifier.width(12.dp))
+            Column {
                 Text(
                     title,
                     style = MaterialTheme.typography.titleMedium,
                     color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
                 )
-                TextButton(onClick = onClick) { Text(if (selected) "Selected" else "Choose") }
+                Text(
+                    body,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            Text(
-                body,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
@@ -903,7 +951,7 @@ private fun Mono(text: String, color: Color = MaterialTheme.colorScheme.onSurfac
             .padding(10.dp)
             .horizontalScroll(rememberScrollState())
     ) {
-        Text(text, color = color, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+        Text(text, color = color, fontFamily = FontFamily.Monospace, fontSize = 15.sp)
     }
 }
 
@@ -920,7 +968,7 @@ private fun ConsolePane(state: ReviveState, viewModel: ReviveViewModel, modifier
         Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Console", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                TextButton(onClick = viewModel::copyLog) { Text("Copy all") }
+                TextButton(onClick = viewModel::copyLog, modifier = Tap) { Text("Copy all") }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
@@ -928,7 +976,7 @@ private fun ConsolePane(state: ReviveState, viewModel: ReviveViewModel, modifier
                     Text(
                         line,
                         fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
+                        fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }

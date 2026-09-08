@@ -60,7 +60,10 @@ data class ReviveState(
     val triage: Triage = Triage.Unanswered,
     val shellEscalated: Boolean = false,
     val escalationReason: String? = null,
-    val currentStep: StepId = StepId.PathChoice,
+    val currentStep: StepId = StepId.Parked,
+    /** Where escalation should send the user back to once shell is granted. */
+    val returnTo: StepId? = null,
+    val parkedConfirmed: Boolean = false,
     val adasBefore: PackageFacts? = null,
     val adasNow: PackageFacts? = null,
     val adasAfter: PackageFacts? = null,
@@ -144,25 +147,32 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     private val _pendingRestart = MutableStateFlow(false)
     val pendingRestart: StateFlow<Boolean> = _pendingRestart.asStateFlow()
 
+    /** A resumed run has just accepted the notice, so it is not asked again. */
+    private var resumedRun = false
+
     init {
         log("--- session start on ${_state.value.profile.describe()} ---")
         prefs.takeSavedRun()?.let { saved ->
+            resumedRun = true
+            val landing = saved.returnTo ?: saved.step
             _state.value = _state.value.copy(
                 path = saved.path,
                 triage = saved.triage,
-                currentStep = saved.step,
+                currentStep = landing,
+                returnTo = null,
                 apkPath = saved.apkPath,
                 acknowledged224 = saved.acknowledged224,
+                parkedConfirmed = saved.parkedConfirmed,
                 runStartedAt = saved.startedAt,
             )
-            log("resumed the run at ${saved.step} after the restart")
+            log("resumed the run at $landing after the restart")
         }
         refreshPackages()
     }
 
     // ---------------------------------------------------------------- disclaimer
 
-    val shouldShowDisclaimer: Boolean get() = prefs.shouldShowDisclaimer
+    val shouldShowDisclaimer: Boolean get() = prefs.shouldShowDisclaimer && !resumedRun
 
     fun onDisclaimerAccepted(suppressFuture: Boolean) {
         prefs.lastAcceptedAt = System.currentTimeMillis()
@@ -192,6 +202,11 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
         if (triage != Triage.WorkingFine) advance()
     }
 
+    fun confirmParked(value: Boolean) {
+        _state.value = _state.value.copy(parkedConfirmed = value)
+        if (value) log("user confirmed the vehicle is parked")
+    }
+
     fun acknowledge224(value: Boolean) {
         _state.value = _state.value.copy(acknowledged224 = value)
     }
@@ -199,7 +214,10 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     fun advance() {
         val state = _state.value
         val index = state.steps.indexOf(state.currentStep)
-        if (index < 0) return
+        if (index < 0) {
+            log("cannot move on: ${state.currentStep} is not part of this run")
+            return
+        }
         val next = state.steps.getOrNull(index + 1) ?: return
         _state.value = state.copy(currentStep = next)
         log("step: $next")
@@ -209,7 +227,11 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     fun back() {
         val state = _state.value
         val index = state.steps.indexOf(state.currentStep)
-        if (index <= 0) return
+        if (index < 0) {
+            log("cannot go back: ${state.currentStep} is not part of this run")
+            return
+        }
+        if (index == 0) return
         val previous = state.steps[index - 1]
         _state.value = clearAfter(state, previous).copy(currentStep = previous)
         log("step: $previous (later results cleared)")
@@ -246,6 +268,7 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
             allApps = state.allApps,
             console = state.console,
             apkPath = state.apkPath,
+            parkedConfirmed = state.parkedConfirmed,
         )
         log("--- run reset ---")
         refreshPackages()
@@ -282,8 +305,10 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
                             path = snapshot.path,
                             triage = snapshot.triage,
                             step = snapshot.currentStep,
+                            returnTo = snapshot.returnTo,
                             apkPath = snapshot.apkPath,
                             acknowledged224 = snapshot.acknowledged224,
+                            parkedConfirmed = snapshot.parkedConfirmed,
                             startedAt = snapshot.runStartedAt,
                         )
                     )
@@ -291,10 +316,18 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
                     _pendingRestart.value = true
                 } else {
                     probeWithShell()
+                    resumeAfterGrant()
                 }
             },
             onFailure = { error -> log("no shell access: ${error.message}") },
         )
+    }
+
+    /** Puts an escalated run back on the step that needed shell in the first place. */
+    private fun resumeAfterGrant() {
+        val target = _state.value.returnTo ?: return
+        _state.value = _state.value.copy(currentStep = target, returnTo = null)
+        log("back to $target now that shell is available")
     }
 
     fun disconnect() {
@@ -309,6 +342,7 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
         _state.value = _state.value.copy(
             shellEscalated = true,
             escalationReason = reason,
+            returnTo = _state.value.currentStep,
             currentStep = StepId.AdbGrant,
         )
         connectIfNeeded()

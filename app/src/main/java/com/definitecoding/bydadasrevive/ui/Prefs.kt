@@ -10,8 +10,10 @@ data class SavedRun(
     val path: UserPath,
     val triage: Triage,
     val step: StepId,
+    val returnTo: StepId?,
     val apkPath: String,
     val acknowledged224: Boolean,
+    val parkedConfirmed: Boolean,
     val startedAt: Long,
 )
 
@@ -40,8 +42,10 @@ class Prefs(context: Context) {
             .putString(KEY_PATH, run.path.name)
             .putString(KEY_TRIAGE, run.triage.name)
             .putString(KEY_STEP, run.step.name)
+            .putString(KEY_RETURN, run.returnTo?.name)
             .putString(KEY_APK, run.apkPath)
             .putBoolean(KEY_ACK224, run.acknowledged224)
+            .putBoolean(KEY_PARKED, run.parkedConfirmed)
             .putLong(KEY_STARTED, run.startedAt)
             .apply()
     }
@@ -53,8 +57,10 @@ class Prefs(context: Context) {
             path = enumOrNull<UserPath>(prefs.getString(KEY_PATH, null)) ?: UserPath.Unchosen,
             triage = enumOrNull<Triage>(prefs.getString(KEY_TRIAGE, null)) ?: Triage.Unanswered,
             step = enumOrNull<StepId>(step) ?: StepId.PathChoice,
+            returnTo = enumOrNull<StepId>(prefs.getString(KEY_RETURN, null)),
             apkPath = prefs.getString(KEY_APK, null) ?: DEFAULT_APK_PATH,
             acknowledged224 = prefs.getBoolean(KEY_ACK224, false),
+            parkedConfirmed = prefs.getBoolean(KEY_PARKED, false),
             startedAt = prefs.getLong(KEY_STARTED, System.currentTimeMillis()),
         )
         clearRun()
@@ -66,6 +72,8 @@ class Prefs(context: Context) {
             .remove(KEY_PATH)
             .remove(KEY_TRIAGE)
             .remove(KEY_STEP)
+            .remove(KEY_RETURN)
+            .remove(KEY_PARKED)
             .remove(KEY_APK)
             .remove(KEY_ACK224)
             .remove(KEY_STARTED)
@@ -81,6 +89,8 @@ class Prefs(context: Context) {
         const val KEY_PATH = "run_path"
         const val KEY_TRIAGE = "run_triage"
         const val KEY_STEP = "run_step"
+        const val KEY_RETURN = "run_return_to"
+        const val KEY_PARKED = "run_parked"
         const val KEY_APK = "run_apk"
         const val KEY_ACK224 = "run_ack224"
         const val KEY_STARTED = "run_started_at"

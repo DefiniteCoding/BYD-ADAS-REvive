@@ -1,6 +1,7 @@
 package com.definitecoding.bydadasrevive.ui
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -84,15 +85,15 @@ fun DisclaimerDialog(
         title = { Text("Read this first") },
         text = {
             Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                Text(DISCLAIMER_TEXT, style = MaterialTheme.typography.bodySmall)
+                Text(DISCLAIMER_TEXT, style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.heightIn(min = 12.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Checkbox(checked = suppress, onCheckedChange = { suppress = it })
-                    Spacer(Modifier.width(4.dp))
-                    Text("Do not show this again", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Do not show this again", style = MaterialTheme.typography.bodyLarge)
                 }
             }
         },
@@ -100,10 +101,18 @@ fun DisclaimerDialog(
             Button(
                 onClick = { onAccept(suppress) },
                 colors = ButtonDefaults.buttonColors(containerColor = Ok, contentColor = Color.Black),
+                modifier = Modifier.defaultMinSize(minHeight = TAP_TARGET_HEIGHT),
             ) {
                 Text("I accept")
             }
         },
-        dismissButton = { TextButton(onClick = onDecline) { Text("Decline and close") } },
+        dismissButton = {
+            TextButton(
+                onClick = onDecline,
+                modifier = Modifier.defaultMinSize(minHeight = TAP_TARGET_HEIGHT),
+            ) {
+                Text("Decline and close")
+            }
+        },
     )
 }

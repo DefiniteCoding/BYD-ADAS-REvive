@@ -50,6 +50,7 @@ sealed interface Diagnosis {
 
 enum class StepId {
     Blocked,
+    Parked,
     PathChoice,
     AdbGrant,
     Triage,
@@ -69,9 +70,9 @@ enum class StepId {
  */
 fun stepsFor(diagnosis: Diagnosis, path: UserPath, triage: Triage, shellEscalated: Boolean): List<StepId> {
     if (diagnosis is Diagnosis.NotCompatible) return listOf(StepId.Blocked)
-    if (diagnosis is Diagnosis.Unknown) return listOf(StepId.PathChoice)
+    if (diagnosis is Diagnosis.Unknown) return listOf(StepId.Parked, StepId.PathChoice)
 
-    val steps = mutableListOf(StepId.PathChoice)
+    val steps = mutableListOf(StepId.Parked, StepId.PathChoice)
     if (path == UserPath.Advanced || shellEscalated) steps += StepId.AdbGrant
 
     if (diagnosis is Diagnosis.AdasPresent) {
@@ -100,6 +101,7 @@ fun stepsFor(diagnosis: Diagnosis, path: UserPath, triage: Triage, shellEscalate
 
 fun titleOf(step: StepId): String = when (step) {
     StepId.Blocked -> "This car is not supported"
+    StepId.Parked -> "Is the car parked?"
     StepId.PathChoice -> "How do you want to do this?"
     StepId.AdbGrant -> "Grant adb shell access"
     StepId.Triage -> "What is the car doing right now?"
