@@ -105,6 +105,7 @@ fun WizardScreen(viewModel: ReviveViewModel, onPickApk: () -> Unit, onClose: () 
                 ) {
                     Column(
                         modifier = Modifier
+                            .align(Alignment.CenterHorizontally)
                             .padding(24.dp)
                             .widthIn(max = CONTENT_MAX_WIDTH)
                             .verticalScroll(rememberScrollState()),
@@ -317,6 +318,7 @@ private fun ParkedStep(state: ReviveState, viewModel: ReviveViewModel) {
                 "The vehicle is parked, in P, in a safe place, and I am not driving",
                 style = MaterialTheme.typography.bodyLarge,
                 color = Warn,
+                modifier = Modifier.weight(1f),
             )
         }
     }
@@ -387,7 +389,10 @@ private fun AdbGrantStep(state: ReviveState, shell: ShellState, viewModel: Reviv
             Row {
                 Button(onClick = viewModel::connect, enabled = !state.busy, modifier = Tap) { Text("Request access") }
                 Spacer(Modifier.width(8.dp))
-                OutlinedButton(onClick = { viewModel.copyToClipboard("adb tcpip", TCPIP_COMMAND) }) {
+                OutlinedButton(
+                    onClick = { viewModel.copyToClipboard("adb tcpip", TCPIP_COMMAND) },
+                    modifier = Tap,
+                ) {
                     Text("Copy \"$TCPIP_COMMAND\"")
                 }
             }
@@ -532,6 +537,7 @@ private fun UninstallStep(state: ReviveState, shell: ShellState, viewModel: Revi
             OutlinedButton(
                 onClick = { confirming = Removal.ForUser },
                 enabled = !state.busy && shell is ShellState.Connected,
+                modifier = Tap,
             ) {
                 Text("Remove for this user (shell)")
             }
@@ -693,7 +699,10 @@ private fun LaunchStep(state: ReviveState, viewModel: ReviveViewModel) {
             Text("Open cluster debug")
         }
         Spacer(Modifier.width(8.dp))
-        OutlinedButton(onClick = { viewModel.copyToClipboard("cluster command", CLUSTER_COMMAND) }) {
+        OutlinedButton(
+            onClick = { viewModel.copyToClipboard("cluster command", CLUSTER_COMMAND) },
+            modifier = Tap,
+        ) {
             Text("Copy command")
         }
     }
@@ -824,6 +833,7 @@ private fun RemovalDialog(removal: Removal, onDismiss: () -> Unit, onConfirm: ()
             Button(
                 onClick = onConfirm,
                 colors = ButtonDefaults.buttonColors(containerColor = Bad, contentColor = Color.Black),
+                modifier = Tap,
             ) {
                 Text("Remove")
             }
@@ -849,7 +859,7 @@ private fun ChoiceCard(selected: Boolean, title: String, body: String, onClick: 
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             RadioButton(selected = selected, onClick = onClick)
             Spacer(Modifier.width(12.dp))
-            Column {
+            Column(Modifier.weight(1f)) {
                 Text(
                     title,
                     style = MaterialTheme.typography.titleMedium,

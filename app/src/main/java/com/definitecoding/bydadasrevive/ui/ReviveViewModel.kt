@@ -335,9 +335,13 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
         log("disconnected")
     }
 
-    /** Adds the adb step to a simple-path run that turned out to need shell after all. */
+    /**
+     * Adds the adb step to a simple-path run that turned out to need shell after all.
+     * A second escalation from a different step has to move the user too, so this only
+     * bows out when shell is already available or the user is on that step.
+     */
     private fun escalateToShell(reason: String) {
-        if (_state.value.shellEscalated) return
+        if (shell.isConnected || _state.value.currentStep == StepId.AdbGrant) return
         log("this step needs shell access: $reason")
         _state.value = _state.value.copy(
             shellEscalated = true,
