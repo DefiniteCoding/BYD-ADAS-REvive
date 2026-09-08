@@ -177,6 +177,9 @@ class ApkInstaller(private val context: Context) {
 
             withTimeoutOrNull(PLATFORM_REPLY_MS) { outcome.await() }?.let { return it }
 
+            // It may have completed in the moment the window closed.
+            if (outcome.isCompleted) return outcome.await()
+
             if (!dialogShown.get()) {
                 return InstallOutcome.Failure(
                     "Android never answered the request. Nothing was installed or removed. " +

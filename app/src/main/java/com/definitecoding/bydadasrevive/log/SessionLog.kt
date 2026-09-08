@@ -26,6 +26,12 @@ class SessionLog(filesDir: File, scope: CoroutineScope) {
      */
     private val pending = Channel<String>(Channel.UNLIMITED)
 
+    /**
+     * Where the file stood before this session wrote anything. The tail stops here, so
+     * a line this session has already shown cannot come back from disk as well.
+     */
+    private val baseline = runCatching { file.length() }.getOrDefault(0L)
+
     init {
         scope.launch(Dispatchers.IO) {
             for (line in pending) writeLine(line)
@@ -49,14 +55,21 @@ class SessionLog(filesDir: File, scope: CoroutineScope) {
         }
     }
 
-    /** Oldest first, rotated file included, for seeding the in-memory tail on startup. */
+    /** Earlier sessions only, oldest first, rotated file included. */
     fun tail(lines: Int): List<String> {
         val all = buildList {
-            if (rotated.exists()) addAll(runCatching { rotated.readLines() }.getOrDefault(emptyList()))
-            if (file.exists()) addAll(runCatching { file.readLines() }.getOrDefault(emptyList()))
+            addAll(linesOf(rotated, Long.MAX_VALUE))
+            addAll(linesOf(file, baseline))
         }
         return all.takeLast(lines)
     }
+
+    private fun linesOf(source: File, limit: Long): List<String> = runCatching {
+        if (!source.exists() || limit <= 0) return emptyList()
+        val bytes = source.readBytes()
+        val cut = if (limit >= bytes.size) bytes else bytes.copyOf(limit.toInt())
+        String(cut).split('\n').filter { it.isNotBlank() }
+    }.getOrDefault(emptyList())
 
     fun fullText(): String = buildString {
         if (rotated.exists()) append(runCatching { rotated.readText() }.getOrDefault(""))
