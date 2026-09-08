@@ -715,19 +715,20 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun saveLogToDownloads() = launchBusy {
-        report(withContext(Dispatchers.IO) { exporter.saveToDownloads(exportText()) })
+        val text = withContext(Dispatchers.IO) { exportText() }
+        report(withContext(Dispatchers.IO) { exporter.saveToDownloads(text) })
     }
 
     fun shareLog() = launchBusy {
-        report(exporter.share(exportText()))
+        report(exporter.share(withContext(Dispatchers.IO) { exportText() }))
     }
 
     fun mailLog() = launchBusy {
-        report(exporter.mail(exportText()))
+        report(exporter.mail(withContext(Dispatchers.IO) { exportText() }))
     }
 
-    fun copyLog() {
-        copyToClipboard("REvive log", exportText())
+    fun copyLog() = launchBusy {
+        copyToClipboard("REvive log", withContext(Dispatchers.IO) { exportText() })
     }
 
     private fun report(result: ExportResult) {

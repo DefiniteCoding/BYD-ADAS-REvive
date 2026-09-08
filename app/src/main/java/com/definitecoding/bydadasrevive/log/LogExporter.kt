@@ -11,6 +11,8 @@ import android.os.Environment
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -66,10 +68,14 @@ class LogExporter(private val context: Context) {
     }
 
     /** Share sheet with the log attached, via a FileProvider uri. */
-    fun share(text: String): ExportResult {
-        val staged = runCatching {
-            val dir = File(context.filesDir, "export").apply { mkdirs() }
-            File(dir, fileName()).apply { writeText(text) }
+    suspend fun share(text: String): ExportResult {
+        val staged = withContext(Dispatchers.IO) {
+            runCatching {
+                val dir = File(context.filesDir, "export").apply { mkdirs() }
+                val target = File(dir, fileName()).apply { writeText(text) }
+                prune(dir)
+                target
+            }
         }.getOrElse { return ExportResult.Failed(it.message ?: "could not stage the log") }
 
         val uri: Uri = runCatching {
@@ -113,6 +119,15 @@ class LogExporter(private val context: Context) {
             )
         }
 
+    /**
+     * A share hands out a uri the receiving app may read after we return, so the last
+     * few are kept rather than deleted outright. Everything older goes.
+     */
+    private fun prune(dir: File) {
+        val files = dir.listFiles()?.sortedByDescending { it.lastModified() } ?: return
+        files.drop(KEEP_EXPORTS).forEach { runCatching { it.delete() } }
+    }
+
     private fun copyToClipboard(text: String) {
         runCatching {
             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -122,5 +137,6 @@ class LogExporter(private val context: Context) {
 
     private companion object {
         const val MAIL_BODY_LIMIT = 60_000
+        const val KEEP_EXPORTS = 3
     }
 }
