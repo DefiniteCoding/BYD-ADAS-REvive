@@ -2,6 +2,10 @@ package com.definitecoding.bydadasrevive.log
 
 import android.util.Log
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -10,14 +14,32 @@ import java.util.Locale
  * The console, persisted. Lines survive the app restart after an adb grant and across
  * launches, because the whole point is to hand a past run to the developer.
  */
-class SessionLog(filesDir: File) {
+class SessionLog(filesDir: File, scope: CoroutineScope) {
 
     private val file = File(filesDir, "console.log")
     private val rotated = File(filesDir, "console.log.1")
 
+    /**
+     * Lines are handed to a single writer rather than written inline: a busy step logs
+     * dozens of them, and an open-append-close each time is not something to do on the
+     * thread drawing the screen. One consumer keeps them in order.
+     */
+    private val pending = Channel<String>(Channel.UNLIMITED)
+
+    init {
+        scope.launch(Dispatchers.IO) {
+            for (line in pending) writeLine(line)
+        }
+    }
+
     fun append(line: String): String {
         val stamped = "${STAMP.format(Date())}  $line"
         Log.i(TAG, line)
+        pending.trySend(stamped)
+        return stamped
+    }
+
+    private fun writeLine(stamped: String) {
         runCatching {
             if (file.length() > MAX_BYTES) {
                 rotated.delete()
@@ -25,7 +47,6 @@ class SessionLog(filesDir: File) {
             }
             file.appendText(stamped + "\n")
         }
-        return stamped
     }
 
     /** Oldest first, rotated file included, for seeding the in-memory tail on startup. */

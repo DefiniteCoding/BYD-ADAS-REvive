@@ -84,23 +84,46 @@ class AdbKeyPair private constructor(
             0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14,
         )
 
+        /**
+         * A key that will not parse is worse than no key: without a rebuild the app can
+         * never authenticate again, and clearing app data would be the only cure. So an
+         * unreadable pair is discarded and replaced. The car will ask to allow debugging
+         * once more, because the identity it trusted is gone.
+         */
         fun loadOrCreate(dir: File): AdbKeyPair {
             val privateFile = File(dir, "adbkey.pk8")
             val publicFile = File(dir, "adbkey.x509")
-            val factory = KeyFactory.getInstance("RSA")
 
             if (privateFile.exists() && publicFile.exists()) {
-                val storedPrivate = factory.generatePrivate(PKCS8EncodedKeySpec(privateFile.readBytes()))
-                val storedPublic = factory.generatePublic(X509EncodedKeySpec(publicFile.readBytes()))
-                return AdbKeyPair(storedPrivate, storedPublic as RSAPublicKey)
+                val restored = runCatching {
+                    val factory = KeyFactory.getInstance("RSA")
+                    AdbKeyPair(
+                        factory.generatePrivate(PKCS8EncodedKeySpec(privateFile.readBytes())),
+                        factory.generatePublic(X509EncodedKeySpec(publicFile.readBytes())) as RSAPublicKey,
+                    )
+                }.getOrNull()
+                if (restored != null) return restored
+                privateFile.delete()
+                publicFile.delete()
             }
 
             val generator = KeyPairGenerator.getInstance("RSA")
             generator.initialize(2048)
             val pair = generator.generateKeyPair()
-            privateFile.writeBytes(pair.private.encoded)
-            publicFile.writeBytes(pair.public.encoded)
+            // Written aside and moved into place, so a crash mid-write leaves the old
+            // pair or no pair, never half of one.
+            writeAtomically(privateFile, pair.private.encoded)
+            writeAtomically(publicFile, pair.public.encoded)
             return AdbKeyPair(pair.private, pair.public as RSAPublicKey)
+        }
+
+        private fun writeAtomically(target: File, bytes: ByteArray) {
+            val temp = File(target.parentFile, target.name + ".tmp")
+            temp.writeBytes(bytes)
+            if (!temp.renameTo(target)) {
+                target.writeBytes(bytes)
+                temp.delete()
+            }
         }
     }
 }

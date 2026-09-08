@@ -9,10 +9,11 @@ import android.content.IntentSender
 import android.content.pm.PackageInstaller
 import java.io.InputStream
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlin.coroutines.resume
+import kotlinx.coroutines.withTimeoutOrNull
 
 sealed interface InstallOutcome {
     data object Success : InstallOutcome
@@ -76,9 +77,14 @@ class ApkInstaller(private val context: Context) {
         }
 
         progress.onPhase("Waiting for Android's confirmation dialog", null)
-        return awaitStatus { intentSender ->
+        val outcome = awaitStatus { intentSender ->
             installer.openSession(sessionId).commit(intentSender)
         }
+        if (outcome is InstallOutcome.Failure) {
+            // Harmless if the platform already finished with it; that just throws.
+            runCatching { installer.abandonSession(sessionId) }
+        }
+        return outcome
     }
 
     /** Copies the APK in, reporting often enough that the bar visibly moves. */
@@ -113,43 +119,51 @@ class ApkInstaller(private val context: Context) {
     }
 
     /**
-     * Registers a one-shot receiver, hands its IntentSender to [start], and suspends
-     * until the platform reports a terminal status. A pending-user-action status is
-     * not terminal: it carries the confirmation dialog to show first.
+     * Registers a one-shot receiver, hands its IntentSender to [start], and waits for
+     * the platform to report a terminal status.
+     *
+     * Two windows, because the two waits are nothing alike: Android answers the request
+     * itself in about a second, while the confirmation dialog waits on a person. Neither
+     * is unbounded, since a status that never arrives used to leave the whole app
+     * disabled with no way back.
      */
-    private suspend fun awaitStatus(start: (IntentSender) -> Unit): InstallOutcome =
-        suspendCancellableCoroutine { continuation ->
-            val requestId = counter.incrementAndGet()
-            val action = "${context.packageName}.INSTALL_STATUS.$requestId"
+    private suspend fun awaitStatus(start: (IntentSender) -> Unit): InstallOutcome {
+        val requestId = counter.incrementAndGet()
+        val action = "${context.packageName}.INSTALL_STATUS.$requestId"
+        val outcome = CompletableDeferred<InstallOutcome>()
+        val dialogShown = AtomicBoolean(false)
 
-            val receiver = object : BroadcastReceiver() {
-                @Suppress("DEPRECATION")
-                override fun onReceive(receiverContext: Context, intent: Intent) {
-                    when (val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -1)) {
-                        PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                            val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
-                            if (confirm == null) {
-                                finish(InstallOutcome.Failure("no confirmation dialog was supplied"))
-                            } else {
-                                confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                runCatching { context.startActivity(confirm) }
-                                    .onFailure { finish(InstallOutcome.Failure("could not show the confirmation dialog: ${it.message}")) }
-                            }
+        val receiver = object : BroadcastReceiver() {
+            @Suppress("DEPRECATION")
+            override fun onReceive(receiverContext: Context, intent: Intent) {
+                when (val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -1)) {
+                    PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                        val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+                        if (confirm == null) {
+                            outcome.complete(
+                                InstallOutcome.Failure("no confirmation dialog was supplied")
+                            )
+                        } else {
+                            confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            runCatching { context.startActivity(confirm) }
+                                .onSuccess { dialogShown.set(true) }
+                                .onFailure {
+                                    outcome.complete(
+                                        InstallOutcome.Failure(
+                                            "could not show the confirmation dialog: ${it.message}"
+                                        )
+                                    )
+                                }
                         }
-                        PackageInstaller.STATUS_SUCCESS -> finish(InstallOutcome.Success)
-                        else -> finish(InstallOutcome.Failure(describe(status, intent)))
                     }
-                }
-
-                private fun finish(outcome: InstallOutcome) {
-                    runCatching { context.unregisterReceiver(this) }
-                    if (continuation.isActive) continuation.resume(outcome)
+                    PackageInstaller.STATUS_SUCCESS -> outcome.complete(InstallOutcome.Success)
+                    else -> outcome.complete(InstallOutcome.Failure(describe(status, intent)))
                 }
             }
+        }
 
-            context.registerReceiver(receiver, IntentFilter(action))
-            continuation.invokeOnCancellation { runCatching { context.unregisterReceiver(receiver) } }
-
+        context.registerReceiver(receiver, IntentFilter(action))
+        try {
             val pending = PendingIntent.getBroadcast(
                 context,
                 requestId,
@@ -158,12 +172,25 @@ class ApkInstaller(private val context: Context) {
             )
 
             runCatching { start(pending.intentSender) }.onFailure { error ->
-                runCatching { context.unregisterReceiver(receiver) }
-                if (continuation.isActive) {
-                    continuation.resume(InstallOutcome.Failure("commit failed: ${error.message}"))
-                }
+                return InstallOutcome.Failure("commit failed: ${error.message}")
             }
+
+            withTimeoutOrNull(PLATFORM_REPLY_MS) { outcome.await() }?.let { return it }
+
+            if (!dialogShown.get()) {
+                return InstallOutcome.Failure(
+                    "Android never answered the request. Nothing was installed or removed. " +
+                        "Try again."
+                )
+            }
+            return withTimeoutOrNull(USER_REPLY_MS) { outcome.await() }
+                ?: InstallOutcome.Failure(
+                    "Timed out waiting for Android's confirmation dialog to be answered."
+                )
+        } finally {
+            runCatching { context.unregisterReceiver(receiver) }
         }
+    }
 
     private fun describe(status: Int, intent: Intent): String {
         val name = when (status) {
@@ -185,6 +212,12 @@ class ApkInstaller(private val context: Context) {
     private companion object {
         const val WRITE_NAME = "revive.apk"
         const val REPORT_EVERY = 512L * 1024
+
+        /** Android answers the request itself in about a second. */
+        const val PLATFORM_REPLY_MS = 45_000L
+
+        /** The dialog waits on a person, so this one is generous. */
+        const val USER_REPLY_MS = 300_000L
 
         /** Hidden extra, but it carries the real INSTALL_FAILED_* code when present. */
         const val EXTRA_LEGACY_STATUS = "android.content.pm.extra.LEGACY_STATUS"

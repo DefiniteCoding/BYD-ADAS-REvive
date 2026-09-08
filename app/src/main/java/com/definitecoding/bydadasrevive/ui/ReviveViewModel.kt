@@ -134,7 +134,7 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     private val inspector = PackageInspector(application.packageManager)
     private val shell = ShellChannel(application.filesDir)
     private val runLog = RunLog(application.filesDir)
-    private val sessionLog = SessionLog(application.filesDir)
+    private val sessionLog = SessionLog(application.filesDir, viewModelScope)
     private val installer = ApkInstaller(application)
     private val exporter = LogExporter(application)
     private val prefs = Prefs(application)
@@ -142,7 +142,7 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     /** Set once the car has trusted this app's adb key, so a new grant is detectable. */
     private val grantMarker = File(application.filesDir, "adb-access-granted")
 
-    private val _state = MutableStateFlow(ReviveState(console = sessionLog.tail(400)))
+    private val _state = MutableStateFlow(ReviveState())
     val state: StateFlow<ReviveState> = _state.asStateFlow()
     val shellState: StateFlow<ShellState> = shell.state
 
@@ -157,6 +157,14 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     private var resumedRun = false
 
     init {
+        // Reading the whole log is not worth delaying the first frame for, so earlier
+        // sessions are folded in underneath whatever this one has already said.
+        viewModelScope.launch {
+            val earlier = withContext(Dispatchers.IO) { sessionLog.tail(400) }
+            _state.value = _state.value.copy(
+                console = (earlier + _state.value.console).takeLast(400),
+            )
+        }
         log("--- session start on ${_state.value.profile.describe()} ---")
         prefs.takeSavedRun()?.let { saved ->
             resumedRun = true
