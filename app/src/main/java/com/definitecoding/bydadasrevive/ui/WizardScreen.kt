@@ -227,18 +227,22 @@ private fun LogMenu(viewModel: ReviveViewModel) {
             DropdownMenuItem(
                 text = { Text("Save to Downloads") },
                 onClick = { open = false; viewModel.saveLogToDownloads() },
+                modifier = Tap,
             )
             DropdownMenuItem(
                 text = { Text("Share") },
                 onClick = { open = false; viewModel.shareLog() },
+                modifier = Tap,
             )
             DropdownMenuItem(
                 text = { Text("Email the developer") },
                 onClick = { open = false; viewModel.mailLog() },
+                modifier = Tap,
             )
             DropdownMenuItem(
                 text = { Text("Copy to clipboard") },
                 onClick = { open = false; viewModel.copyLog() },
+                modifier = Tap,
             )
         }
     }
@@ -458,7 +462,7 @@ private fun PathChoiceStep(state: ReviveState, viewModel: ReviveViewModel) {
 private fun AdbGrantStep(state: ReviveState, shell: ShellState, viewModel: ReviveViewModel) {
     when (shell) {
         is ShellState.Connected -> {
-            Text("Shell access is granted.", style = MaterialTheme.typography.bodyLarge, color = Ok)
+            Banner(kind = StatusKind.Success, text = "Full access is granted.")
             Mono(shell.banner, Ok)
         }
         else -> {
@@ -500,7 +504,10 @@ private fun AdbGrantStep(state: ReviveState, shell: ShellState, viewModel: Reviv
                     Text("Copy \"$TCPIP_COMMAND\"")
                 }
             }
-            if (shell is ShellState.Failed) Mono(shell.message, Bad)
+            if (shell is ShellState.Failed) {
+                Banner(kind = StatusKind.Failure, text = "The car did not give access.")
+                Mono(shell.message, Bad)
+            }
         }
     }
 }
@@ -575,7 +582,10 @@ private fun ChooseApkStep(state: ReviveState, viewModel: ReviveViewModel, onPick
         }
     }
     state.installPhase?.let { Busy(it, null) }
-    state.apkError?.let { Mono(it, Bad) }
+    state.apkError?.let { error ->
+        Banner(kind = StatusKind.Failure, text = "That file could not be read.")
+        Mono(error, Bad)
+    }
     state.apkInfo?.let { info ->
         Mono(
             buildString {
@@ -1176,7 +1186,7 @@ private fun FactsBlock(facts: PackageFacts?) {
         return
     }
     if (!facts.installed) {
-        Text("${facts.packageName}: not visible to PackageManager", color = Bad)
+        Banner(kind = StatusKind.Warning, text = "${facts.packageName} is not on the car.")
         return
     }
     Mono(
