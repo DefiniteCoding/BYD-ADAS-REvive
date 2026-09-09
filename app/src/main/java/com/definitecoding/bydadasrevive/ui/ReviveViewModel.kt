@@ -806,13 +806,25 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
         _state.value = _state.value.copy(console = (_state.value.console + stamped).takeLast(400))
     }
 
+    /**
+     * A count rather than a flag, because two of these can overlap: the stepper rail is
+     * tappable while a step is working, and the step it jumps to refreshes packages. The
+     * quick one finished first and re-enabled the footer over the slow one still running.
+     *
+     * Plain Int is enough. viewModelScope dispatches on the main thread and every
+     * withContext in here returns to it, so the count is only ever touched from one.
+     */
+    private var busyCount = 0
+
     private fun launchBusy(block: suspend () -> Unit) {
         viewModelScope.launch {
+            busyCount++
             _state.value = _state.value.copy(busy = true)
             try {
                 block()
             } finally {
-                _state.value = _state.value.copy(busy = false)
+                busyCount--
+                if (busyCount == 0) _state.value = _state.value.copy(busy = false)
             }
         }
     }
