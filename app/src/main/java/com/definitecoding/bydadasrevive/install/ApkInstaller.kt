@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.IntentSender
 import android.content.pm.PackageInstaller
+import androidx.core.content.ContextCompat
 import java.io.InputStream
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicBoolean
@@ -162,7 +163,17 @@ class ApkInstaller(private val context: Context) {
             }
         }
 
-        context.registerReceiver(receiver, IntentFilter(action))
+        // Not exported, for two reasons. The status arrives through a PendingIntent this
+        // app created, so the system fires it as this app and a same-uid broadcast is
+        // delivered whatever the flag says. And exporting it would let anything else on
+        // the car broadcast this action with STATUS_SUCCESS and make the wizard report an
+        // install that never happened, which the verify step would then trust.
+        ContextCompat.registerReceiver(
+            context,
+            receiver,
+            IntentFilter(action),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         try {
             val pending = PendingIntent.getBroadcast(
                 context,
