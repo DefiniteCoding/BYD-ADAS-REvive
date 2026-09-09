@@ -38,36 +38,50 @@ class AdbConnection private constructor(
 
     private var nextLocalId = 1
 
-    /** Runs [command] through `sh -c` on the device and collects stdout and stderr. */
-    fun shell(command: String): ShellResult {
+    /**
+     * Runs [command] through `sh -c` on the device and collects stdout and stderr.
+     *
+     * [timeoutMs] is the socket read timeout, so it bounds the longest silence between
+     * frames rather than the command as a whole. A command that prints nothing until it
+     * finishes has exactly one silence as long as itself, which is why anything that
+     * moves real numbers of bytes has to ask for more than [DEFAULT_COMMAND_TIMEOUT_MS].
+     */
+    fun shell(command: String, timeoutMs: Int = DEFAULT_COMMAND_TIMEOUT_MS): ShellResult {
         val localId = nextLocalId++
         // The shell service gives us no exit status of its own, so carry it in the stream.
         val wrapped = "$command; echo \"$RC_SENTINEL\$?\""
-        write(AdbMessage(A_OPEN, localId, 0, nulTerminated("shell:$wrapped")))
 
-        val collected = StringBuilder()
-        var closed = false
-        while (!closed) {
-            val message = read()
-            when (message.command) {
-                A_OKAY -> Unit
-                A_WRTE -> {
-                    if (message.arg1 == localId) {
-                        collected.append(String(message.payload))
-                        write(AdbMessage(A_OKAY, localId, message.arg0, ByteArray(0)))
+        val previous = runCatching { socket.soTimeout }.getOrDefault(timeoutMs)
+        runCatching { socket.soTimeout = timeoutMs }
+        try {
+            write(AdbMessage(A_OPEN, localId, 0, nulTerminated("shell:$wrapped")))
+
+            val collected = StringBuilder()
+            var closed = false
+            while (!closed) {
+                val message = read()
+                when (message.command) {
+                    A_OKAY -> Unit
+                    A_WRTE -> {
+                        if (message.arg1 == localId) {
+                            collected.append(String(message.payload))
+                            write(AdbMessage(A_OKAY, localId, message.arg0, ByteArray(0)))
+                        }
                     }
-                }
-                A_CLSE -> {
-                    if (message.arg1 == localId) {
-                        write(AdbMessage(A_CLSE, localId, message.arg0, ByteArray(0)))
-                        closed = true
+                    A_CLSE -> {
+                        if (message.arg1 == localId) {
+                            write(AdbMessage(A_CLSE, localId, message.arg0, ByteArray(0)))
+                            closed = true
+                        }
                     }
+                    else -> Unit
                 }
-                else -> Unit
             }
-        }
 
-        return parseExitCode(collected.toString())
+            return parseExitCode(collected.toString())
+        } finally {
+            runCatching { socket.soTimeout = previous }
+        }
     }
 
     private fun parseExitCode(raw: String): ShellResult {
@@ -94,6 +108,12 @@ class AdbConnection private constructor(
         const val DEFAULT_HOST = "127.0.0.1"
         const val DEFAULT_PORT = 5555
 
+        /** Enough for a query that answers immediately, short enough to fail visibly. */
+        const val DEFAULT_COMMAND_TIMEOUT_MS = 15_000
+
+        /** For commands that copy or install, which say nothing until they are done. */
+        const val SLOW_COMMAND_TIMEOUT_MS = 180_000
+
         /**
          * Opens and authenticates a connection. The first attempt with an already
          * trusted key returns immediately; an unknown key makes the car show the
@@ -104,7 +124,7 @@ class AdbConnection private constructor(
             port: Int = DEFAULT_PORT,
             keyPair: AdbKeyPair,
             connectTimeoutMs: Int = 4_000,
-            ioTimeoutMs: Int = 15_000,
+            ioTimeoutMs: Int = DEFAULT_COMMAND_TIMEOUT_MS,
             promptTimeoutMs: Int = 120_000,
         ): AdbConnection {
             val socket = Socket()

@@ -59,26 +59,30 @@ class ShellChannel(filesDir: File) {
      * is holding the interface busy for every second of it. Refusing outright turns a
      * dead screen into a failure the step can explain.
      */
-    suspend fun run(command: String): Result<ShellResult> {
+    suspend fun run(
+        command: String,
+        timeoutMs: Int = AdbConnection.DEFAULT_COMMAND_TIMEOUT_MS,
+    ): Result<ShellResult> {
         if (_state.value is ShellState.Connecting) {
             return Result.failure(IllegalStateException("still waiting for adb access"))
         }
-        return runLocked(command)
+        return runLocked(command, timeoutMs)
     }
 
-    private suspend fun runLocked(command: String): Result<ShellResult> = lock.withLock {
-        val active = connection
-            ?: return Result.failure(IllegalStateException("No adb connection"))
+    private suspend fun runLocked(command: String, timeoutMs: Int): Result<ShellResult> =
+        lock.withLock {
+            val active = connection
+                ?: return Result.failure(IllegalStateException("No adb connection"))
 
-        withContext(Dispatchers.IO) {
-            runCatching { active.shell(command) }
-        }.onFailure { error ->
-            // A dead socket must not be reused; force a visible reconnect.
-            active.close()
-            connection = null
-            _state.value = ShellState.Failed(error.message ?: error.javaClass.simpleName)
+            withContext(Dispatchers.IO) {
+                runCatching { active.shell(command, timeoutMs) }
+            }.onFailure { error ->
+                // A dead socket must not be reused; force a visible reconnect.
+                active.close()
+                connection = null
+                _state.value = ShellState.Failed(error.message ?: error.javaClass.simpleName)
+            }
         }
-    }
 
     fun disconnect() {
         connection?.close()

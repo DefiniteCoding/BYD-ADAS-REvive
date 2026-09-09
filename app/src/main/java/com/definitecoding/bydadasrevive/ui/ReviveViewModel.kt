@@ -29,6 +29,7 @@ import com.definitecoding.bydadasrevive.pkg.InstalledApp
 import com.definitecoding.bydadasrevive.pkg.PackageFacts
 import com.definitecoding.bydadasrevive.pkg.PackageInspector
 import com.definitecoding.bydadasrevive.pkg.readApk
+import com.definitecoding.bydadasrevive.adb.AdbConnection
 import com.definitecoding.bydadasrevive.adb.ShellResult
 import com.definitecoding.bydadasrevive.shell.ShellChannel
 import com.definitecoding.bydadasrevive.shell.ShellState
@@ -564,7 +565,11 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         _state.value = _state.value.copy(installPhase = "Copying the APK in with shell")
-        runShell("cp '$path' '${staged.absolutePath}' && chmod 644 '${staged.absolutePath}'")
+        val target = shellQuote(staged.absolutePath)
+        runShell(
+            "cp ${shellQuote(path)} $target && chmod 644 $target",
+            timeoutMs = AdbConnection.SLOW_COMMAND_TIMEOUT_MS,
+        )
         _state.value = _state.value.copy(installPhase = null)
         if (!staged.canRead() || staged.length() == 0L) {
             _state.value = _state.value.copy(apkError = "shell could not copy $path")
@@ -623,7 +628,10 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
             escalateToShell("pm uninstall --user 0 needs shell")
             return@launchBusy
         }
-        val output = runShell("pm uninstall --user 0 $ADAS_PACKAGE")
+        val output = runShell(
+            "pm uninstall --user 0 $ADAS_PACKAGE",
+            timeoutMs = AdbConnection.SLOW_COMMAND_TIMEOUT_MS,
+        )
         _state.value = _state.value.copy(uninstallOutput = output.trim())
         refreshPackagesNow()
     }
@@ -634,7 +642,10 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
             escalateToShell("pm install-existing needs shell")
             return@launchBusy
         }
-        val output = runShell("pm install-existing $ADAS_PACKAGE")
+        val output = runShell(
+            "pm install-existing $ADAS_PACKAGE",
+            timeoutMs = AdbConnection.SLOW_COMMAND_TIMEOUT_MS,
+        )
         _state.value = _state.value.copy(installOutput = output.trim())
         refreshPackagesNow()
     }
@@ -776,11 +787,25 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
 
     // ---------------------------------------------------------------- plumbing
 
-    private suspend fun runShell(command: String): String = runShellResult(command).output
+    /**
+     * Quotes a value for the device shell. Everything inside single quotes is literal,
+     * and the quote itself cannot be escaped in place, so it is closed, escaped and
+     * reopened. Without this an APK path containing an apostrophe builds a malformed
+     * command and fails as if the file were unreadable.
+     */
+    private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
-    private suspend fun runShellResult(command: String): ShellResult {
+    private suspend fun runShell(
+        command: String,
+        timeoutMs: Int = AdbConnection.DEFAULT_COMMAND_TIMEOUT_MS,
+    ): String = runShellResult(command, timeoutMs).output
+
+    private suspend fun runShellResult(
+        command: String,
+        timeoutMs: Int = AdbConnection.DEFAULT_COMMAND_TIMEOUT_MS,
+    ): ShellResult {
         log("$ $command")
-        return shell.run(command).fold(
+        return shell.run(command, timeoutMs).fold(
             onSuccess = { result ->
                 log(result.output.ifBlank { "(no output)" } + (result.exitCode?.let { " [rc=$it]" } ?: ""))
                 result
