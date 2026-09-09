@@ -320,7 +320,16 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
      * The connect attempt is itself the request for access: an untrusted key is what
      * makes adbd raise the "Allow debugging?" dialog on the car.
      */
-    fun connect() = launchBusy {
+    /**
+     * Deliberately not a busy block. This waits on a person answering a dialog on the
+     * car, up to two minutes of it, and a background handshake has no business
+     * disabling the step the user is actually on. The shell pill reports its progress.
+     */
+    fun connect() {
+        viewModelScope.launch { runConnect() }
+    }
+
+    private suspend fun runConnect() {
         log("checking for adb shell access on ${_state.value.host}:${_state.value.port}")
         val firstGrant = !grantMarker.exists()
         if (firstGrant) log("no grant on record - watch the car screen for \"Allow debugging?\"")
@@ -390,19 +399,27 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     private suspend fun refreshPackagesNow() {
         val adas = inspector.facts(ADAS_PACKAGE)
         val cluster = inspector.facts(CLUSTER_PACKAGE)
-        val apps = withContext(Dispatchers.IO) { inspector.installedApps() }
         val state = _state.value
         _state.value = state.copy(
             adasBefore = state.adasBefore ?: adas,
             adasNow = adas,
             clusterDebug = cluster,
-            allApps = apps,
         )
         log(
             "PackageManager: $ADAS_PACKAGE ${if (adas.installed) "installed v${adas.versionName} (${adas.versionCode})" else "NOT installed"}, " +
-                "$CLUSTER_PACKAGE ${if (cluster.installed) "present" else "ABSENT"}, ${apps.size} packages visible"
+                "$CLUSTER_PACKAGE ${if (cluster.installed) "present" else "ABSENT"}"
         )
         rediagnose()
+    }
+
+    /** Three binder calls per package, so it is fetched only where it is shown. */
+    fun loadAllPackages() {
+        if (_state.value.allApps.isNotEmpty()) return
+        viewModelScope.launch {
+            val apps = withContext(Dispatchers.IO) { inspector.installedApps() }
+            _state.value = _state.value.copy(allApps = apps)
+            log("${apps.size} packages visible to PackageManager")
+        }
     }
 
     private fun rediagnose() {

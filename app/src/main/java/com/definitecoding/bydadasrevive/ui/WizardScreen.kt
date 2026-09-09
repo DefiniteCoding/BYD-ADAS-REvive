@@ -390,11 +390,11 @@ private fun BlockedStep(state: ReviveState, viewModel: ReviveViewModel) {
         }
     )
     Row {
-        OutlinedButton(onClick = viewModel::connect, enabled = !state.busy, modifier = Tap) { Text("Try adb anyway") }
+        OutlinedButton(onClick = viewModel::connect, modifier = Tap) { Text("Try adb anyway") }
         Spacer(Modifier.width(8.dp))
         OutlinedButton(onClick = viewModel::refreshPackages, enabled = !state.busy, modifier = Tap) { Text("Re-check") }
     }
-    AllPackages(state)
+    AllPackages(state, viewModel)
 }
 
 @Composable
@@ -427,6 +427,9 @@ private fun ParkedStep(state: ReviveState, viewModel: ReviveViewModel) {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    if (state.parkedConfirmed) {
+        Banner(kind = StatusKind.Success, text = "Press Next, at the bottom right, to carry on.")
+    }
 }
 
 @Composable
@@ -495,7 +498,13 @@ private fun AdbGrantStep(state: ReviveState, shell: ShellState, viewModel: Reviv
                 )
             }
             Row {
-                Button(onClick = viewModel::connect, enabled = !state.busy, modifier = Tap) { Text("Request access") }
+                Button(
+                    onClick = viewModel::connect,
+                    enabled = shell !is ShellState.Connecting,
+                    modifier = Tap,
+                ) {
+                    Text(if (shell is ShellState.Connecting) "Waiting for the car" else "Request access")
+                }
                 Spacer(Modifier.width(8.dp))
                 OutlinedButton(
                     onClick = { viewModel.copyToClipboard("adb tcpip", TCPIP_COMMAND) },
@@ -684,7 +693,11 @@ private fun UninstallStep(state: ReviveState, shell: ShellState, viewModel: Revi
         )
         Mono(output, if (gone) Ok else Bad)
         if (!gone && shell !is ShellState.Connected) {
-            OutlinedButton(onClick = viewModel::connect, enabled = !state.busy, modifier = Tap) {
+            OutlinedButton(
+                onClick = viewModel::connect,
+                enabled = shell !is ShellState.Connected,
+                modifier = Tap,
+            ) {
                 Text("Get full access and try the other route")
             }
         }
@@ -894,7 +907,7 @@ private fun LaunchStep(state: ReviveState, viewModel: ReviveViewModel) {
                 "for an ordinary app.",
             style = MaterialTheme.typography.bodyMedium,
         )
-        OutlinedButton(onClick = viewModel::connect, enabled = !state.busy, modifier = Tap) {
+        OutlinedButton(onClick = viewModel::connect, modifier = Tap) {
             Text("Get full access and try again")
         }
     }
@@ -1141,8 +1154,9 @@ private fun Busy(phase: String, fraction: Float?) {
 }
 
 @Composable
-private fun AllPackages(state: ReviveState) {
+private fun AllPackages(state: ReviveState, viewModel: ReviveViewModel) {
     var query by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) { viewModel.loadAllPackages() }
     OutlinedTextField(
         value = query,
         onValueChange = { query = it },
