@@ -53,7 +53,20 @@ class ShellChannel(filesDir: File) {
         }
     }
 
-    suspend fun run(command: String): Result<ShellResult> = lock.withLock {
+    /**
+     * A command must never queue behind a handshake. That lock is held for as long as
+     * someone takes to answer the dialog on the car, up to two minutes, and the caller
+     * is holding the interface busy for every second of it. Refusing outright turns a
+     * dead screen into a failure the step can explain.
+     */
+    suspend fun run(command: String): Result<ShellResult> {
+        if (_state.value is ShellState.Connecting) {
+            return Result.failure(IllegalStateException("still waiting for adb access"))
+        }
+        return runLocked(command)
+    }
+
+    private suspend fun runLocked(command: String): Result<ShellResult> = lock.withLock {
         val active = connection
             ?: return Result.failure(IllegalStateException("No adb connection"))
 

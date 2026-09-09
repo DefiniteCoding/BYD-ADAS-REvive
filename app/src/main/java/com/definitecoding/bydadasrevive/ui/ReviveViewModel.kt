@@ -35,6 +35,7 @@ import com.definitecoding.bydadasrevive.shell.ShellState
 import java.io.File
 import java.util.Date
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -311,6 +312,8 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
         _state.value = _state.value.copy(host = host, port = port)
     }
 
+    private var connectJob: Job? = null
+
     fun connectIfNeeded() {
         if (shell.isConnected) return
         connect()
@@ -319,14 +322,19 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * The connect attempt is itself the request for access: an untrusted key is what
      * makes adbd raise the "Allow debugging?" dialog on the car.
-     */
-    /**
-     * Deliberately not a busy block. This waits on a person answering a dialog on the
-     * car, up to two minutes of it, and a background handshake has no business
-     * disabling the step the user is actually on. The shell pill reports its progress.
+     *
+     * Deliberately not a busy block. This waits on a person answering that dialog, up
+     * to two minutes of it, and a background handshake has no business disabling the
+     * step the user is actually on. The shell pill reports its progress.
+     *
+     * One handshake at a time, and none at all once there is a connection. A second
+     * would take the channel lock the moment the first released it and close the socket
+     * that was just opened; and since firstGrant is read before either takes the lock,
+     * both would treat themselves as the first grant and both would save the run.
      */
     fun connect() {
-        viewModelScope.launch { runConnect() }
+        if (shell.isConnected || connectJob?.isActive == true) return
+        connectJob = viewModelScope.launch { runConnect() }
     }
 
     private suspend fun runConnect() {
