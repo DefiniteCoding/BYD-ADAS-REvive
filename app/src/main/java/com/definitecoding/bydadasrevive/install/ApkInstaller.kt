@@ -7,7 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.IntentSender
 import android.content.pm.PackageInstaller
-import androidx.core.content.ContextCompat
+import android.os.Build
 import java.io.InputStream
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicBoolean
@@ -163,17 +163,21 @@ class ApkInstaller(private val context: Context) {
             }
         }
 
-        // Not exported, for two reasons. The status arrives through a PendingIntent this
-        // app created, so the system fires it as this app and a same-uid broadcast is
-        // delivered whatever the flag says. And exporting it would let anything else on
-        // the car broadcast this action with STATUS_SUCCESS and make the wizard report an
-        // install that never happened, which the verify step would then trust.
-        ContextCompat.registerReceiver(
-            context,
-            receiver,
-            IntentFilter(action),
-            ContextCompat.RECEIVER_NOT_EXPORTED,
-        )
+        // Android 14 throws for a context-registered receiver that declares neither export
+        // flag. Not exported is the right one: the status arrives through a PendingIntent
+        // this app created, so the system fires it as this app, and exporting it would let
+        // anything else on the car send this action with STATUS_SUCCESS and have the
+        // wizard report an install that never happened.
+        //
+        // Branched by hand rather than through ContextCompat, which below API 33 ignores
+        // the flag and registers with a synthesised signature permission instead, throwing
+        // if the manifest merge did not contribute it. This line runs at the moment an
+        // install is committed, on an API 31 car, and is no place to find that out.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(receiver, IntentFilter(action), Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            context.registerReceiver(receiver, IntentFilter(action))
+        }
         try {
             val pending = PendingIntent.getBroadcast(
                 context,
