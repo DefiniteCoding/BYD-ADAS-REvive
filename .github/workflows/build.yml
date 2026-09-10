@@ -10,6 +10,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # The repo default is a read-only token, which cannot cut a release. Scoped to
+    # this job rather than raised repo-wide.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
