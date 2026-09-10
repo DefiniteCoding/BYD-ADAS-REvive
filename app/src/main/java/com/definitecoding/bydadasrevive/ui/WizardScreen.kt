@@ -123,7 +123,10 @@ fun WizardScreen(viewModel: ReviveViewModel, onPickApk: () -> Unit, onClose: () 
             )
             Spacer(Modifier.heightIn(min = 12.dp))
 
-            Row(Modifier.fillMaxSize()) {
+            // weight, not fillMaxSize: a Column child that fills takes every remaining
+            // pixel, which left the footer measured at zero height and Back and Next
+            // undrawn. Weight hands this row what is left once the footer has its share.
+            Row(Modifier.weight(1f).fillMaxWidth()) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     modifier = Modifier.weight(if (showConsole) 1.5f else 1f).fillMaxHeight(),
