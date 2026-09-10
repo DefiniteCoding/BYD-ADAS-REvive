@@ -11,8 +11,11 @@ android {
         applicationId = "com.definitecoding.bydadasrevive"
         minSdk = 26
         targetSdk = 32
-        versionCode = 1
-        versionName = "1.0"
+        // A release is cut from a tag: the tag names it, and the CI run number keeps
+        // versionCode climbing so the car offers an update rather than a reinstall.
+        // A build from anywhere else is marked dev so it cannot be mistaken for one.
+        versionCode = System.getenv("RELEASE_CODE")?.toIntOrNull() ?: 1
+        versionName = System.getenv("RELEASE_NAME") ?: "1.0-dev"
     }
 
     // Release builds are signed in CI from base64 secrets; a local build without
