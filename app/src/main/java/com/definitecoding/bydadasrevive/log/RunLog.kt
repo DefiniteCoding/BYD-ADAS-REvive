@@ -42,21 +42,38 @@ data class RunRecord(
 class RunLog(filesDir: File) {
 
     private val file = File(filesDir, "runs.jsonl")
+    private val rotated = File(filesDir, "runs.jsonl.1")
 
     fun append(record: RunRecord) {
+        if (file.length() > MAX_BYTES) {
+            rotated.delete()
+            file.renameTo(rotated)
+        }
         file.appendText(record.toJson().toString() + "\n")
     }
 
-    fun readAll(): List<JSONObject> {
-        if (!file.exists()) return emptyList()
-        return file.readLines()
-            .filter { it.isNotBlank() }
-            .mapNotNull { runCatching { JSONObject(it) }.getOrNull() }
-    }
+    fun readAll(): List<JSONObject> = (textOf(rotated) + textOf(file))
+        .lineSequence()
+        .filter { it.isNotBlank() }
+        .mapNotNull { runCatching { JSONObject(it) }.getOrNull() }
+        .toList()
 
-    fun asText(): String = if (!file.exists()) "" else file.readText()
+    fun asText(): String = textOf(rotated) + textOf(file)
+
+    private fun textOf(source: File): String =
+        if (!source.exists()) "" else runCatching { source.readText() }.getOrDefault("")
 
     fun clear() {
         file.delete()
+        rotated.delete()
+    }
+
+    private companion object {
+        /**
+         * One record per completed attempt, so this should never be reached. It is
+         * here because an append-only file with no ceiling is a file that grows for
+         * as long as the app is installed.
+         */
+        const val MAX_BYTES = 128L * 1024
     }
 }

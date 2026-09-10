@@ -19,6 +19,22 @@ import java.util.Locale
 
 const val DEVELOPER_EMAIL = "definitecoding@gmail.com"
 
+/**
+ * The clipboard and a mail body both cross a binder transaction, which carries about
+ * a megabyte for everything in flight at once and throws when that is exceeded. Saving
+ * to Downloads and the share sheet hand over a file instead and have no such ceiling,
+ * so they get the whole log.
+ */
+const val CLIPBOARD_BODY_LIMIT = 200_000
+
+/** The last [limit] characters, saying so when anything was left behind. */
+fun tailForTransfer(text: String, limit: Int): String = if (text.length <= limit) {
+    text
+} else {
+    "(earlier lines dropped to fit; Save to Downloads has the whole log)\n\n" +
+        text.takeLast(limit)
+}
+
 sealed interface ExportResult {
     data class Saved(val location: String) : ExportResult
     data class Handed(val how: String) : ExportResult
@@ -101,7 +117,7 @@ class LogExporter(private val context: Context) {
         val intent = Intent(Intent.ACTION_SENDTO).apply {
             data = Uri.parse("mailto:$DEVELOPER_EMAIL")
             putExtra(Intent.EXTRA_SUBJECT, "BYD ADAS REvive log")
-            putExtra(Intent.EXTRA_TEXT, text.takeLast(MAIL_BODY_LIMIT))
+            putExtra(Intent.EXTRA_TEXT, tailForTransfer(text, MAIL_BODY_LIMIT))
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         return launch(intent, "a mail composer", text)
@@ -131,7 +147,8 @@ class LogExporter(private val context: Context) {
     private fun copyToClipboard(text: String) {
         runCatching {
             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.setPrimaryClip(ClipData.newPlainText("REvive log", "$DEVELOPER_EMAIL\n\n$text"))
+            val body = tailForTransfer("$DEVELOPER_EMAIL\n\n$text", CLIPBOARD_BODY_LIMIT)
+            clipboard.setPrimaryClip(ClipData.newPlainText("REvive log", body))
         }
     }
 

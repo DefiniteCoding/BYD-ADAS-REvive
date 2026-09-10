@@ -20,7 +20,9 @@ import com.definitecoding.bydadasrevive.install.ApkInstaller
 import com.definitecoding.bydadasrevive.install.ApkSource
 import com.definitecoding.bydadasrevive.install.InstallOutcome
 import com.definitecoding.bydadasrevive.log.ExportResult
+import com.definitecoding.bydadasrevive.log.CLIPBOARD_BODY_LIMIT
 import com.definitecoding.bydadasrevive.log.LogExporter
+import com.definitecoding.bydadasrevive.log.tailForTransfer
 import com.definitecoding.bydadasrevive.log.RunLog
 import com.definitecoding.bydadasrevive.log.RunRecord
 import com.definitecoding.bydadasrevive.log.SessionLog
@@ -764,7 +766,8 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun copyLog() = launchBusy {
-        copyToClipboard("REvive log", withContext(Dispatchers.IO) { exportText() })
+        val text = withContext(Dispatchers.IO) { exportText() }
+        copyToClipboard("REvive log", tailForTransfer(text, CLIPBOARD_BODY_LIMIT))
     }
 
     private fun report(result: ExportResult) {
@@ -777,12 +780,27 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
         _messages.tryEmit(message)
     }
 
+    /**
+     * The clipboard is a binder call and it throws when the payload is too big for the
+     * transaction, so a failure here has to be reported rather than allowed to take
+     * the app down from inside a coroutine.
+     */
     fun copyToClipboard(label: String, text: String) {
-        val clipboard = getApplication<Application>()
-            .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
-        log("copied $label to clipboard")
-        _messages.tryEmit("Copied $label to the clipboard")
+        runCatching {
+            val clipboard = getApplication<Application>()
+                .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+        }.fold(
+            onSuccess = {
+                log("copied $label to clipboard")
+                _messages.tryEmit("Copied $label to the clipboard")
+            },
+            onFailure = { error ->
+                val message = "could not copy $label: ${error.message}"
+                log(message)
+                _messages.tryEmit(message)
+            },
+        )
     }
 
     // ---------------------------------------------------------------- plumbing

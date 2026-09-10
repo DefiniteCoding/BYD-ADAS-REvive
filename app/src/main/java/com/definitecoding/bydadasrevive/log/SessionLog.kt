@@ -83,7 +83,12 @@ class SessionLog(filesDir: File, scope: CoroutineScope) {
 
     companion object {
         const val TAG = "REvive"
-        private const val MAX_BYTES = 512L * 1024
+        /**
+         * Per file, and one rotated file is kept, so the console costs at most twice
+         * this on disk. Sized so the whole export still moves through a share sheet
+         * and a mail composer without being cut to pieces.
+         */
+        private const val MAX_BYTES = 256L * 1024
         val STAMP: SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
     }
 }
