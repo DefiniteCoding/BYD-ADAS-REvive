@@ -52,21 +52,10 @@ class RunLog(filesDir: File) {
         file.appendText(record.toJson().toString() + "\n")
     }
 
-    fun readAll(): List<JSONObject> = (textOf(rotated) + textOf(file))
-        .lineSequence()
-        .filter { it.isNotBlank() }
-        .mapNotNull { runCatching { JSONObject(it) }.getOrNull() }
-        .toList()
-
     fun asText(): String = textOf(rotated) + textOf(file)
 
     private fun textOf(source: File): String =
         if (!source.exists()) "" else runCatching { source.readText() }.getOrDefault("")
-
-    fun clear() {
-        file.delete()
-        rotated.delete()
-    }
 
     private companion object {
         /**

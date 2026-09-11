@@ -381,11 +381,6 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
         log("back to $target now that shell is available")
     }
 
-    fun disconnect() {
-        shell.disconnect()
-        log("disconnected")
-    }
-
     /**
      * Adds the adb step to a simple-path run that turned out to need shell after all.
      * A second escalation from a different step has to move the user too, so this only

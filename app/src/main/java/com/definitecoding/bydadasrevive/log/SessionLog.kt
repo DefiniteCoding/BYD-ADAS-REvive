@@ -76,11 +76,6 @@ class SessionLog(filesDir: File, scope: CoroutineScope) {
         if (file.exists()) append(runCatching { file.readText() }.getOrDefault(""))
     }
 
-    fun clear() {
-        file.delete()
-        rotated.delete()
-    }
-
     companion object {
         const val TAG = "REvive"
         /**

@@ -83,10 +83,4 @@ class ShellChannel(filesDir: File) {
                 _state.value = ShellState.Failed(error.message ?: error.javaClass.simpleName)
             }
         }
-
-    fun disconnect() {
-        connection?.close()
-        connection = null
-        _state.value = ShellState.Disconnected
-    }
 }
