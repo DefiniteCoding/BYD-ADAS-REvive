@@ -508,7 +508,14 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
     fun inspectApk() = launchBusy {
         _state.value = _state.value.copy(apkInfo = null, apkError = null)
         val file = stageForReading() ?: return@launchBusy
-        readApk(getApplication<Application>().packageManager, file).fold(
+        _state.value = _state.value.copy(installPhase = "Reading the APK's manifest")
+        // getPackageArchiveInfo opens the archive and parses its manifest, which is a
+        // disk read the size of the APK and has no business on the drawing thread.
+        val parsed = withContext(Dispatchers.IO) {
+            readApk(getApplication<Application>().packageManager, file)
+        }
+        _state.value = _state.value.copy(installPhase = null)
+        parsed.fold(
             onSuccess = { info ->
                 _state.value = _state.value.copy(apkInfo = info)
                 log("apk: ${info.packageName} v${info.versionName} (${info.versionCode}), ${info.sizeBytes} bytes")
