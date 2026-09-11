@@ -190,9 +190,14 @@ class ReviveViewModel(application: Application) : AndroidViewModel(application) 
 
     // ---------------------------------------------------------------- disclaimer
 
-    val shouldShowDisclaimer: Boolean get() = prefs.shouldShowDisclaimer && !resumedRun
+    /** An accept without the checkbox lasts as long as this process, so a recreation does not re-ask. */
+    private var acceptedThisProcess = false
+
+    val shouldShowDisclaimer: Boolean
+        get() = prefs.shouldShowDisclaimer && !resumedRun && !acceptedThisProcess
 
     fun onDisclaimerAccepted(suppressFuture: Boolean) {
+        acceptedThisProcess = true
         prefs.lastAcceptedAt = System.currentTimeMillis()
         if (suppressFuture) prefs.disclaimerSuppressedVersion = DISCLAIMER_VERSION
         log("disclaimer v$DISCLAIMER_VERSION accepted${if (suppressFuture) " (suppressed for future launches)" else ""}")

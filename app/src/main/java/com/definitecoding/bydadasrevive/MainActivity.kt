@@ -33,9 +33,6 @@ class MainActivity : ComponentActivity() {
 
     private val model: ReviveViewModel by viewModels()
 
-    /** Nothing touches the car until the notice has been answered. */
-    private var disclaimerAnswered = false
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -52,10 +49,7 @@ class MainActivity : ComponentActivity() {
                 val restarting by model.pendingRestart.collectAsStateWithLifecycle()
 
                 LaunchedEffect(Unit) {
-                    if (!showDisclaimer) {
-                        disclaimerAnswered = true
-                        model.connectIfNeeded()
-                    }
+                    if (!showDisclaimer) model.connectIfNeeded()
                 }
 
                 when {
@@ -77,7 +71,6 @@ class MainActivity : ComponentActivity() {
                             DisclaimerDialog(
                                 onAccept = { suppress ->
                                     showDisclaimer = false
-                                    disclaimerAnswered = true
                                     model.onDisclaimerAccepted(suppress)
                                 },
                                 onDecline = {
@@ -92,10 +85,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Retries the handshake when coming back from the adb shell app or Settings. */
+    /**
+     * Retries the handshake when coming back from the adb shell app or Settings. Nothing
+     * touches the car until the notice has been answered, which is what the guard is for:
+     * the view model reports the notice as no longer needed once it has been accepted or
+     * suppressed, and never goes back to needing it within a process.
+     */
     override fun onResume() {
         super.onResume()
-        if (disclaimerAnswered) model.connectIfNeeded()
+        if (!model.shouldShowDisclaimer) model.connectIfNeeded()
     }
 
     /**
