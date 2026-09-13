@@ -118,8 +118,17 @@ fun DisclaimerDialog(
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // The terms box is the only part that may shrink. Material3 measures this
+                // slot with weight(1f, fill = false) and clips it from the bottom, and the
+                // checkbox is the last thing in the column, so at 240dpi on a 720dp-tall
+                // window the checkbox fell off the end and the notice could not be silenced.
+                // Weighting the box makes Compose measure every fixed sibling first and hand
+                // this one what is left, so the checkbox keeps its 56dp whatever the density.
+                // fill = false keeps the box at its content height on a window with room to
+                // spare, and heightIn caps it where it always was.
                 Column(
                     Modifier
+                        .weight(1f, fill = false)
                         .heightIn(max = 260.dp)
                         .background(
                             MaterialTheme.colorScheme.surfaceVariant,
