@@ -128,7 +128,6 @@ fun DisclaimerDialog(
                 // spare, and heightIn caps it where it always was.
                 Column(
                     Modifier
-                        .weight(1f, fill = false)
                         .heightIn(max = 260.dp)
                         .background(
                             MaterialTheme.colorScheme.surfaceVariant,
