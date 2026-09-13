@@ -61,6 +61,9 @@ android {
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
+            // Roborazzi writes a file only in record mode. Setting it here rather than
+            // on the CI command line means a local run produces the same screenshots.
+            all { it.systemProperty("roborazzi.test.record", "true") }
         }
     }
 
@@ -101,7 +104,6 @@ dependencies {
     testImplementation(platform("androidx.compose:compose-bom:2024.06.00"))
     testImplementation("androidx.compose.ui:ui-test-junit4")
     testImplementation("io.github.takahirom.roborazzi:roborazzi:1.43.1")
-    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.43.1")
     // createComposeRule needs an activity to host the composition under test.
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
